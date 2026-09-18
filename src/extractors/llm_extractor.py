@@ -80,10 +80,14 @@ class LLMExtractor(BaseExtractor):
 
     def __init__(
         self,
-        model_name: str = "gemini-2.5-flash",
+        model_name: str | None = None,
         api_key: str | None = None,
     ):
-        self._model_name = model_name
+        self._model_name = (
+            model_name
+            or os.environ.get("GEMINI_MODEL")
+            or "gemini-3.6-flash"
+        )
         self._api_key = (
             api_key
             or os.environ.get("GOOGLE_API_KEY")
@@ -135,6 +139,7 @@ class LLMExtractor(BaseExtractor):
                     temperature=0.1,
                     max_output_tokens=4096,
                 ),
+                request_options={"timeout": 60},
             )
 
             raw_text = response.text.strip()
