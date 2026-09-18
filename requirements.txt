@@ -1,0 +1,18 @@
+# Core
+pydantic>=2.0,<3.0
+Pillow>=10.0
+flask>=3.0
+
+# UI Automation (Windows)
+uiautomation>=2.0.18
+pywin32>=306
+comtypes>=1.4
+
+# OCR / LLM extraction
+google-generativeai>=0.8.0
+
+# Testing
+pytest>=8.0
+
+# Utilities
+python-dateutil>=2.8
