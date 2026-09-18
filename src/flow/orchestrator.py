@@ -252,12 +252,12 @@ class Orchestrator:
 
         except StopForReview as e:
             result.error = f"STOPPED FOR REVIEW: {e}"
-            result.milestones = self.app.milestones
+            result.milestones = self.app.milestones if self.app else []
             self._report("STOP", str(e))
 
         except Exception as e:
             result.error = f"ERROR: {e}"
-            result.milestones = self.app.milestones
+            result.milestones = self.app.milestones if self.app else []
             self._report("ERROR", str(e))
             logger.exception("Orchestrator error")
 

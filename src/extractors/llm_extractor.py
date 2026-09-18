@@ -86,7 +86,7 @@ class LLMExtractor(BaseExtractor):
         self._model_name = (
             model_name
             or os.environ.get("GEMINI_MODEL")
-            or "gemini-3.6-flash"
+            or "gemini-3.5-flash"
         )
         self._api_key = (
             api_key
@@ -124,31 +124,65 @@ class LLMExtractor(BaseExtractor):
             import google.generativeai as genai
 
             genai.configure(api_key=self._api_key)
-            model = genai.GenerativeModel(self._model_name)
+
+            # Candidate models in priority order
+            candidate_models = [self._model_name]
+            for alt in ["gemini-3.5-flash", "gemini-3.6-flash", "gemini-flash-latest"]:
+                if alt not in candidate_models:
+                    candidate_models.append(alt)
 
             # Upload and send image
             image_data = image_path.read_bytes()
             mime_type = self._guess_mime(image_path)
 
-            response = model.generate_content(
-                [
-                    EXTRACTION_PROMPT,
-                    {"mime_type": mime_type, "data": image_data},
-                ],
-                generation_config=genai.types.GenerationConfig(
-                    temperature=0.1,
-                    max_output_tokens=4096,
-                ),
-                request_options={"timeout": 60},
-            )
+            response = None
+            used_model = None
+            last_err = None
+
+            for m_name in candidate_models:
+                try:
+                    model = genai.GenerativeModel(m_name)
+                    response = model.generate_content(
+                        [
+                            EXTRACTION_PROMPT,
+                            {"mime_type": mime_type, "data": image_data},
+                        ],
+                        generation_config=genai.types.GenerationConfig(
+                            temperature=0.1,
+                            max_output_tokens=4096,
+                        ),
+                        request_options={"timeout": 60},
+                    )
+                    used_model = m_name
+                    break
+                except Exception as ex:
+                    last_err = ex
+                    err_str = str(ex).lower()
+                    if "quota" in err_str or "resourceexhausted" in err_str or "404" in err_str:
+                        continue
+                    raise
+
+            if response is None:
+                raise last_err or ExtractionError("All candidate models failed")
 
             raw_text = response.text.strip()
 
-            # Strip markdown code fences if present
-            raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
-            raw_text = re.sub(r"\s*```$", "", raw_text)
+            # Print LLM response to terminal for inspection
+            print("\n" + "=" * 65)
+            print(f"  [GEMINI LLM RESPONSE] Model: {used_model}")
+            print("=" * 65)
+            try:
+                print(raw_text)
+            except Exception:
+                safe_text = raw_text.encode("ascii", errors="replace").decode("ascii")
+                print(safe_text)
+            print("=" * 65 + "\n")
 
-            data = json.loads(raw_text)
+            # Strip markdown code fences if present
+            clean_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
+            clean_text = re.sub(r"\s*```$", "", clean_text)
+
+            data = json.loads(clean_text)
             return OrderData(**data)
 
         except json.JSONDecodeError as e:
