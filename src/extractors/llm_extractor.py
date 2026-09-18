@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from pathlib import Path
 
 from src.extractors.base import BaseExtractor, ExtractionError
@@ -146,45 +147,61 @@ class LLMExtractor(BaseExtractor):
                 part = types.Part.from_bytes(data=image_data, mime_type=mime_type)
 
                 for m_name in candidate_models:
-                    try:
-                        response = client.models.generate_content(
-                            model=m_name,
-                            contents=[EXTRACTION_PROMPT, part],
-                            config=types.GenerateContentConfig(
-                                temperature=0.1,
-                                max_output_tokens=4096,
-                            ),
-                        )
-                        raw_text = response.text.strip()
-                        used_model = m_name
+                    for attempt in range(2):
+                        try:
+                            response = client.models.generate_content(
+                                model=m_name,
+                                contents=[EXTRACTION_PROMPT, part],
+                                config=types.GenerateContentConfig(
+                                    temperature=0.1,
+                                    max_output_tokens=4096,
+                                ),
+                            )
+                            raw_text = response.text.strip()
+                            used_model = m_name
+                            break
+                        except Exception as ex:
+                            last_err = ex
+                            err_str = str(ex).lower()
+                            # If model is 404 or quota exhausted, try next model immediately
+                            if any(k in err_str for k in ["quota", "resourceexhausted", "404", "not_found"]):
+                                break
+                            # If transient network disconnect, retry once after 2s
+                            if attempt == 0 and any(k in err_str for k in ["disconnected", "reset", "closed", "timeout", "429"]):
+                                time.sleep(2)
+                                continue
+                            break
+
+                    if raw_text is not None:
                         break
-                    except Exception as ex:
-                        last_err = ex
-                        err_str = str(ex).lower()
-                        if any(k in err_str for k in ["quota", "resourceexhausted", "404", "not_found", "429"]):
-                            continue
-                        raise
 
             except ImportError:
                 import google.generativeai as legacy_genai
                 legacy_genai.configure(api_key=self._api_key)
                 for m_name in candidate_models:
-                    try:
-                        model = legacy_genai.GenerativeModel(m_name)
-                        response = model.generate_content(
-                            [EXTRACTION_PROMPT, {"mime_type": mime_type, "data": image_data}],
-                            generation_config=legacy_genai.types.GenerationConfig(temperature=0.1, max_output_tokens=4096),
-                            request_options={"timeout": 60},
-                        )
-                        raw_text = response.text.strip()
-                        used_model = m_name
+                    for attempt in range(2):
+                        try:
+                            model = legacy_genai.GenerativeModel(m_name)
+                            response = model.generate_content(
+                                [EXTRACTION_PROMPT, {"mime_type": mime_type, "data": image_data}],
+                                generation_config=legacy_genai.types.GenerationConfig(temperature=0.1, max_output_tokens=4096),
+                                request_options={"timeout": 60},
+                            )
+                            raw_text = response.text.strip()
+                            used_model = m_name
+                            break
+                        except Exception as ex:
+                            last_err = ex
+                            err_str = str(ex).lower()
+                            if any(k in err_str for k in ["quota", "resourceexhausted", "404", "not_found"]):
+                                break
+                            if attempt == 0 and any(k in err_str for k in ["disconnected", "reset", "closed", "timeout", "429"]):
+                                time.sleep(2)
+                                continue
+                            break
+
+                    if raw_text is not None:
                         break
-                    except Exception as ex:
-                        last_err = ex
-                        err_str = str(ex).lower()
-                        if any(k in err_str for k in ["quota", "resourceexhausted", "404", "not_found", "429"]):
-                            continue
-                        raise
 
             if raw_text is None:
                 raise last_err or ExtractionError("All candidate models failed")
