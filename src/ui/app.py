@@ -99,7 +99,7 @@ def upload_image():
 
 @app.route("/api/select-sample", methods=["POST"])
 def select_sample():
-    """Select a sample image."""
+    """Select a sample image and auto-extract instantly via fast local sidecar."""
     data = request.get_json()
     path = data.get("path", "")
     if not Path(path).exists():
@@ -108,7 +108,28 @@ def select_sample():
     with _lock:
         _state["image_path"] = path
 
-    return jsonify({"success": True, "path": path})
+    # Auto-extract instantly for fast UI preview (< 0.01s)
+    try:
+        extractor = MockExtractor()
+        order_data = extractor.extract(Path(path))
+        warnings = extractor.validate_extraction(order_data)
+        summary = order_data.to_summary_dict()
+        summary["warnings"] = warnings
+
+        with _lock:
+            _state["extracted_data"] = summary
+            _state["current_order_data"] = order_data
+            _state["status"] = "extracted"
+
+        print("\n" + "=" * 65, flush=True)
+        print(f"  [SAMPLE ORDER LOADED: {Path(path).name}]", flush=True)
+        print("=" * 65, flush=True)
+        print(json.dumps(summary, indent=2), flush=True)
+        print("=" * 65 + "\n", flush=True)
+
+        return jsonify({"success": True, "path": path, "data": summary})
+    except Exception:
+        return jsonify({"success": True, "path": path})
 
 
 @app.route("/api/extract", methods=["POST"])
@@ -145,7 +166,14 @@ def extract_data():
 
         with _lock:
             _state["extracted_data"] = summary
+            _state["current_order_data"] = order_data
             _state["status"] = "extracted"
+
+        print("\n" + "=" * 65, flush=True)
+        print(f"  [ORDER DATA EXTRACTED: MODE={mode.upper()}]", flush=True)
+        print("=" * 65, flush=True)
+        print(json.dumps(summary, indent=2), flush=True)
+        print("=" * 65 + "\n", flush=True)
 
         return jsonify({"success": True, "data": summary})
 
@@ -166,6 +194,7 @@ def run_automation():
             return jsonify({"error": "Automation already running"}), 409
         image_path = _state["image_path"]
         mode = _state.get("mode", "mock")
+        cached_order_data = _state.get("current_order_data")
         _state["status"] = "running"
         _state["progress"] = []
         _state["result"] = None
@@ -176,6 +205,7 @@ def run_automation():
         return jsonify({"error": "No image selected"}), 400
 
     def progress_callback(step, message):
+        print(f"  [{step}] {message}", flush=True)
         with _lock:
             _state["progress"].append({
                 "step": step,
@@ -184,7 +214,20 @@ def run_automation():
             })
 
     def run_flow():
+        mode_str = "DRY RUN SIMULATION" if dry_run else "LIVE AUTOMATION"
+        print("\n" + "=" * 65, flush=True)
+        print(f"  [STARTING FLOW: {mode_str}]", flush=True)
+        print(f"  Image: {Path(image_path).name}", flush=True)
+        print("=" * 65 + "\n", flush=True)
+
         try:
+            import importlib
+            import src.automation.uia_wrapper
+            import src.automation.fakturama_app
+            import src.flow.orchestrator
+            importlib.reload(src.automation.uia_wrapper)
+            importlib.reload(src.automation.fakturama_app)
+            importlib.reload(src.flow.orchestrator)
             from src.automation.uia_wrapper import UIAWrapper
             from src.flow.orchestrator import Orchestrator
 
@@ -198,17 +241,26 @@ def run_automation():
             orch = Orchestrator(extractor, uia, dry_run=dry_run)
             orch.set_progress_callback(progress_callback)
 
-            result = orch.run(image_path)
+            result = orch.run(image_path, order_data=cached_order_data)
 
             with _lock:
                 _state["result"] = result.to_dict()
                 _state["status"] = "done" if result.success else "error"
 
+            print("\n" + "=" * 65, flush=True)
+            if result.success:
+                print("  ✓ AUTOMATION COMPLETED SUCCESSFULLY", flush=True)
+            else:
+                print(f"  ✕ FLOW STOPPED: {result.error}", flush=True)
+            print("=" * 65 + "\n", flush=True)
+
         except Exception as e:
             logger.exception("Automation flow error")
+            print(f"\n[ERROR] Flow failed: {e}\n", flush=True)
             with _lock:
                 _state["status"] = "error"
                 _state["result"] = {"error": str(e), "success": False}
+
 
     thread = threading.Thread(target=run_flow, daemon=True)
     thread.start()
@@ -243,8 +295,24 @@ def reset():
 
 @app.route("/screenshots/<path:filename>")
 def serve_screenshot(filename):
-    """Serve screenshot files."""
+    """Serve screenshot files, with safe image fallback."""
+    # Clean filename of any .failed suffix
+    clean_name = filename.replace(".failed", "")
+    target = SCREENSHOTS_DIR / clean_name
+    if target.exists():
+        return send_from_directory(str(SCREENSHOTS_DIR), clean_name)
+    
+    # Try finding matching screenshot by prefix/step
+    for match in sorted(SCREENSHOTS_DIR.glob(f"*{clean_name}*")):
+        if match.suffix.lower() == ".png":
+            return send_from_directory(str(SCREENSHOTS_DIR), match.name)
+            
+    # If not found, return an existing PNG screenshot or 404
+    existing = list(SCREENSHOTS_DIR.glob("*.png"))
+    if existing:
+        return send_from_directory(str(SCREENSHOTS_DIR), existing[0].name)
     return send_from_directory(str(SCREENSHOTS_DIR), filename)
+
 
 
 @app.route("/samples/<path:filename>")

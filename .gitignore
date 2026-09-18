@@ -19,3 +19,5 @@ env/
 artifacts/screenshots/
 *.db
 *.hsqldb
+@AutomationLog.txt
+

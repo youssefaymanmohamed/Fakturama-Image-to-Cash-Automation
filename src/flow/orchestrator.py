@@ -89,16 +89,18 @@ class Orchestrator:
         self._progress_callback = callback
 
     def _report(self, step: str, message: str):
+        print(f"[{step}] {message}", flush=True)
         logger.info(f"[{step}] {message}")
         if self._progress_callback:
             self._progress_callback(step, message)
 
-    def run(self, image_path: str | Path) -> FlowResult:
+    def run(self, image_path: str | Path, order_data: Optional[OrderData] = None) -> FlowResult:
         """
         Execute the complete Order-first automation flow.
 
         Args:
             image_path: Path to the purchase order image.
+            order_data: Optional pre-extracted OrderData (skips redundant extraction).
 
         Returns:
             FlowResult with success status, verification results, and milestones.
@@ -110,8 +112,12 @@ class Orchestrator:
             # =============================================================
             # STEP 1: Extract and Open New Order
             # =============================================================
-            self._report("1.1", "Extracting data from order image...")
-            order_data = self.extractor.extract(image_path)
+            if order_data is None:
+                self._report("1.1", "Extracting data from order image...")
+                order_data = self.extractor.extract(image_path)
+            else:
+                self._report("1.1", "Using pre-extracted order data (instant fast-path)")
+
             result.order_data = order_data
 
             # Post-extraction validation

@@ -82,8 +82,8 @@
                         <input type="radio" name="mode" value="mock" checked>
                         <div class="mode-card">
                             <div class="mode-icon">🧪</div>
-                            <div class="mode-label">Mock / Test</div>
-                            <div class="mode-desc">Built-in sample data, no API key needed</div>
+                            <div class="mode-label">Mock / Test <span style="font-size:0.75rem; color:#10b981; font-weight:bold;">⚡ Instant</span></div>
+                            <div class="mode-desc">Built-in sample data, extracted in &lt; 0.1s</div>
                         </div>
                     </label>
                     <label class="mode-option" data-mode="llm">
@@ -91,7 +91,7 @@
                         <div class="mode-card">
                             <div class="mode-icon">🤖</div>
                             <div class="mode-label">Gemini LLM</div>
-                            <div class="mode-desc">Real image extraction via Google Gemini API</div>
+                            <div class="mode-desc">Live multimodal vision via Google API (~5–10s)</div>
                         </div>
                     </label>
                 </div>
@@ -265,7 +265,13 @@
                         body: JSON.stringify({ path })
                     });
                     const data = await resp.json();
-                    if (data.success) showSelection(name, path);
+                    if (data.success) {
+                        showSelection(name, path);
+                        if (data.data) {
+                            showExtractedData(data.data);
+                            setStatus('extracted', 'Data Ready (Instant)');
+                        }
+                    }
                 } catch (e) {
                     alert('Selection failed: ' + e.message);
                 }
