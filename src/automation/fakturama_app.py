@@ -60,11 +60,23 @@ class FakturamaApp:
     # ===================================================================
 
     def open_new_order(self) -> None:
-        """Step 1.3: Click Order in the top toolbar and wait for the editor."""
+        """Step 1.3: Click Order in the top toolbar or navigation and wait for the editor."""
         try:
-            btn = self.uia.find_toolbar_button(TOOLBAR.ORDER_NEW)
-            self.uia.click(btn)
-            time.sleep(1)
+            # 1. Try toolbar button
+            try:
+                btn = self.uia.find_toolbar_button(TOOLBAR.ORDER_NEW)
+                self.uia.click(btn)
+            except UIAError:
+                # 2. Try by name in navigation tree or New panel
+                try:
+                    btn = self.uia.find_by_name("Order", partial=False)
+                    self.uia.click(btn)
+                except UIAError:
+                    # 3. Try partial name match
+                    btn = self.uia.find_by_name("Order", partial=True)
+                    self.uia.click(btn)
+
+            time.sleep(1.5)
             self._milestone("1.3", "New Order editor opened")
         except UIAError as e:
             raise UIAError(f"Failed to open New Order: {e}")

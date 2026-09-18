@@ -72,24 +72,69 @@ class UIAWrapper:
     # Window management
     # -----------------------------------------------------------------------
 
+    def _bring_to_front(self, win: auto.WindowControl):
+        """Bring window to foreground so the user can physically watch automation."""
+        try:
+            hwnd = win.NativeWindowHandle
+            if hwnd:
+                import ctypes
+                user32 = ctypes.windll.user32
+                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                user32.SetForegroundWindow(hwnd)
+        except Exception:
+            pass
+        try:
+            win.SetFocus()
+        except Exception:
+            pass
+
     def find_fakturama_window(self, timeout: int = 30) -> auto.WindowControl:
-        """Find the main Fakturama window by partial title match."""
+        """Find the main Fakturama window, filtering out browsers and IDEs."""
         deadline = time.time() + timeout
+        browser_indicators = [
+            "edge", "chrome", "firefox", "opera", "brave",
+            "visual studio code", "chrome_widgetwin", "mozillaclass",
+            "msedge", "code.exe"
+        ]
+
         while time.time() < deadline:
             try:
-                # Fakturama windows may have various titles
                 for win in auto.GetRootControl().GetChildren():
-                    if win.ControlTypeName == "WindowControl":
-                        name = win.Name or ""
-                        class_name = win.ClassName or ""
-                        if "fakturama" in name.lower() or "SWT_Window" in class_name:
+                    if win.ControlTypeName != "WindowControl":
+                        continue
+
+                    name = (win.Name or "").strip()
+                    class_name = (win.ClassName or "").strip()
+                    low_name = name.lower()
+                    low_class = class_name.lower()
+
+                    # Exclude browser tabs, IDE windows, and dev tools
+                    if any(b in low_name or b in low_class for b in browser_indicators):
+                        continue
+
+                    # 1. Match by running process name
+                    try:
+                        import psutil
+                        proc = psutil.Process(win.ProcessId)
+                        proc_name = proc.name().lower()
+                        if "fakturama" in proc_name or "javaw" in proc_name:
                             self._root_window = win
-                            logger.info(f"Found Fakturama window: '{name}' ({class_name})")
+                            logger.info(f"Found Fakturama window by process: '{name}' (PID: {win.ProcessId})")
+                            self._bring_to_front(win)
                             return win
+                    except Exception:
+                        pass
+
+                    # 2. Match by SWT class or standalone Fakturama title
+                    if class_name.startswith("SWT_Window") or ("fakturama" in low_name and not any(b in low_name for b in ["edge", "chrome", "firefox"])):
+                        self._root_window = win
+                        logger.info(f"Found Fakturama window: '{name}' ({class_name})")
+                        self._bring_to_front(win)
+                        return win
             except Exception:
                 pass
             time.sleep(1)
-        raise UIAError(f"Fakturama window not found within {timeout}s")
+        raise UIAError(f"Fakturama window not found within {timeout}s. Please ensure Fakturama is running on your desktop.")
 
     def attach_or_launch(
         self,
@@ -101,7 +146,18 @@ class UIAWrapper:
             return self.find_fakturama_window(timeout=5)
         except UIAError:
             logger.info(f"Launching Fakturama from: {exe_path}")
-            os.startfile(exe_path)
+            if os.path.exists(exe_path):
+                os.startfile(exe_path)
+            else:
+                for candidate in [
+                    r"C:\Program Files\Fakturama2\Fakturama.exe",
+                    r"C:\Program Files (x86)\Fakturama2\Fakturama.exe",
+                    os.path.expandvars(r"%LOCALAPPDATA%\Fakturama2\Fakturama.exe"),
+                    os.path.expandvars(r"%PROGRAMFILES%\Fakturama2\Fakturama.exe"),
+                ]:
+                    if os.path.exists(candidate):
+                        os.startfile(candidate)
+                        break
             return self.find_fakturama_window(timeout=timeout)
 
     def get_root(self) -> auto.WindowControl:
@@ -201,16 +257,25 @@ class UIAWrapper:
     def find_toolbar_button(self, name: str, parent=None) -> auto.Control:
         """
         Find a toolbar button by name. Fakturama uses Eclipse RCP toolbars
-        where buttons may be ToolBarControl > ButtonControl or ToolItemControl.
+        where buttons may be ToolBarControl > ButtonControl, ToolItemControl,
+        or buttons located in the main window.
         """
         parent = parent or self.get_root()
         toolbars = self.find_all_by_type("ToolBarControl", parent)
         for tb in toolbars:
-            items = self._walk_tree(tb, max_depth=3)
+            items = self._walk_tree(tb, max_depth=4)
             for item in items:
-                item_name = item.Name or ""
-                if item_name == name or name.lower() in item_name.lower():
+                item_name = (item.Name or "").strip()
+                if item_name.lower() == name.lower() or name.lower() in item_name.lower():
                     return item
+
+        # Also search top-level buttons / menu items if not in ToolBarControl
+        for item in self._walk_tree(parent, max_depth=6):
+            if item.ControlTypeName in ("ButtonControl", "MenuItemControl", "ToolItemControl", "HyperlinkControl"):
+                item_name = (item.Name or "").strip()
+                if item_name.lower() == name.lower():
+                    return item
+
         raise UIAError(f"Toolbar button not found: '{name}'")
 
     # -----------------------------------------------------------------------
