@@ -1,0 +1,38 @@
+{
+  "order_date": "2025-03-15",
+  "external_reference": "PO-2025-0042",
+  "debtor": {
+    "company": "Acme Corporation",
+    "first_name": "John",
+    "last_name": "Smith",
+    "alias": "acme-smith",
+    "billing_address": {
+      "street": "123 Innovation Drive",
+      "zip": "10115",
+      "city": "Berlin",
+      "country": "Germany",
+      "email": "john.smith@acme-corp.de",
+      "telephone": "+49 30 12345678"
+    },
+    "delivery_address": null,
+    "payment_method": "Bank Transfer",
+    "discount_percent": "0",
+    "net_or_gross": "Net"
+  },
+  "items": [
+    {
+      "sku": "WIDGET-001",
+      "description": "Premium Stainless Steel Widget",
+      "quantity": "10",
+      "unit_net_price": "24.50",
+      "vat_percent": "19",
+      "discount_percent": "5",
+      "source_total": "232.75"
+    }
+  ],
+  "source_total_net": "232.75",
+  "source_total_vat": "44.22",
+  "source_total_gross": "276.97",
+  "paid_status": "PAID",
+  "payment_date": "2025-03-20"
+}

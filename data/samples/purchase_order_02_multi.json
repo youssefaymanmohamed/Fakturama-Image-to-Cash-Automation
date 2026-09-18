@@ -1,0 +1,63 @@
+{
+  "order_date": "2025-06-01",
+  "external_reference": "PO-2025-0187",
+  "debtor": {
+    "company": "TechParts GmbH",
+    "first_name": "Maria",
+    "last_name": "Mueller",
+    "alias": "techparts-mueller",
+    "billing_address": {
+      "street": "Friedrichstraße 45",
+      "zip": "80331",
+      "city": "Munich",
+      "country": "Germany",
+      "email": "maria.mueller@techparts.de",
+      "telephone": "+49 89 87654321"
+    },
+    "delivery_address": {
+      "street": "Lagerweg 12",
+      "zip": "80339",
+      "city": "Munich",
+      "country": "Germany",
+      "email": "warehouse@techparts.de",
+      "telephone": "+49 89 87654322"
+    },
+    "payment_method": "Credit Card",
+    "discount_percent": "0",
+    "net_or_gross": "Net"
+  },
+  "items": [
+    {
+      "sku": "BOLT-M8X20",
+      "description": "Hex Head Bolt M8x20 Grade 8.8",
+      "quantity": "500",
+      "unit_net_price": "0.35",
+      "vat_percent": "19",
+      "discount_percent": "10",
+      "source_total": "157.50"
+    },
+    {
+      "sku": "NUT-M8-FLANGE",
+      "description": "Flanged Lock Nut M8 Zinc Plated",
+      "quantity": "500",
+      "unit_net_price": "0.18",
+      "vat_percent": "19",
+      "discount_percent": "10",
+      "source_total": "81.00"
+    },
+    {
+      "sku": "WASHER-M8-FLAT",
+      "description": "Flat Washer M8 Stainless A2",
+      "quantity": "1000",
+      "unit_net_price": "0.08",
+      "vat_percent": "7",
+      "discount_percent": "0",
+      "source_total": "80.00"
+    }
+  ],
+  "source_total_net": "318.50",
+  "source_total_vat": "50.92",
+  "source_total_gross": "369.42",
+  "paid_status": "UNPAID",
+  "payment_date": null
+}
