@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fakturama Image-to-Cash Automation</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- Ambient background particles -->
+    <div class="ambient-bg">
+        <div class="particle p1"></div>
+        <div class="particle p2"></div>
+        <div class="particle p3"></div>
+    </div>
+
+    <header class="top-bar">
+        <div class="logo">
+            <div class="logo-icon">⚡</div>
+            <div>
+                <h1>Fakturama <span class="accent">Image-to-Cash</span></h1>
+                <p class="subtitle">Automated Order &amp; Invoice Pipeline</p>
+            </div>
+        </div>
+        <div class="status-badge" id="globalStatus">
+            <span class="status-dot"></span>
+            <span class="status-text">Ready</span>
+        </div>
+    </header>
+
+    <main class="dashboard">
+        <!-- ==================== STEP 1: Image Selection ==================== -->
+        <section class="card card-upload" id="stepUpload">
+            <div class="card-header">
+                <span class="step-number">1</span>
+                <h2>Select Order Image</h2>
+            </div>
+            <div class="card-body">
+                <div class="upload-zone" id="dropZone">
+                    <div class="upload-icon">📄</div>
+                    <p class="upload-text">Drag &amp; drop your purchase order image here</p>
+                    <p class="upload-hint">or click to browse (PNG, JPG, PDF)</p>
+                    <input type="file" id="fileInput" accept="image/*,.pdf" hidden>
+                </div>
+
+                {% if samples %}
+                <div class="samples-section">
+                    <h3>— or select a sample —</h3>
+                    <div class="sample-grid">
+                        {% for sample in samples %}
+                        <button class="sample-card" data-path="{{ sample.path }}" data-name="{{ sample.name }}">
+                            <div class="sample-icon">📋</div>
+                            <span>{{ sample.name }}</span>
+                        </button>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+
+                <div class="selected-file" id="selectedFile" style="display:none">
+                    <div class="file-info">
+                        <span class="file-icon">✓</span>
+                        <span class="file-name" id="selectedFileName"></span>
+                    </div>
+                    <button class="btn btn-sm btn-ghost" onclick="clearSelection()">Change</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================== STEP 2: Extraction Mode ==================== -->
+        <section class="card card-extract" id="stepExtract">
+            <div class="card-header">
+                <span class="step-number">2</span>
+                <h2>Extract &amp; Preview</h2>
+            </div>
+            <div class="card-body">
+                <div class="mode-selector">
+                    <label class="mode-option active" data-mode="mock">
+                        <input type="radio" name="mode" value="mock" checked>
+                        <div class="mode-card">
+                            <div class="mode-icon">🧪</div>
+                            <div class="mode-label">Mock / Test</div>
+                            <div class="mode-desc">Built-in sample data, no API key needed</div>
+                        </div>
+                    </label>
+                    <label class="mode-option" data-mode="llm">
+                        <input type="radio" name="mode" value="llm">
+                        <div class="mode-card">
+                            <div class="mode-icon">🤖</div>
+                            <div class="mode-label">Gemini LLM</div>
+                            <div class="mode-desc">Real image extraction via Google Gemini API</div>
+                        </div>
+                    </label>
+                </div>
+                <button class="btn btn-primary btn-extract" id="btnExtract" onclick="extractData()">
+                    <span class="btn-icon">🔍</span> Extract Data
+                </button>
+
+                <!-- Extraction results preview -->
+                <div class="extraction-preview" id="extractionPreview" style="display:none">
+                    <div class="preview-header">
+                        <h3>📊 Extracted Order Data</h3>
+                        <span class="badge badge-success" id="extractionBadge">Validated</span>
+                    </div>
+                    <div class="preview-grid">
+                        <div class="preview-section">
+                            <h4>Order Header</h4>
+                            <div class="data-row"><span>Date</span><strong id="prevDate"></strong></div>
+                            <div class="data-row"><span>Reference</span><strong id="prevRef"></strong></div>
+                            <div class="data-row"><span>Payment</span><strong id="prevPayment"></strong></div>
+                            <div class="data-row"><span>Status</span><strong id="prevStatus"></strong></div>
+                        </div>
+                        <div class="preview-section">
+                            <h4>Debtor</h4>
+                            <div class="data-row"><span>Name</span><strong id="prevDebtor"></strong></div>
+                            <div class="data-row"><span>Company</span><strong id="prevCompany"></strong></div>
+                        </div>
+                    </div>
+                    <div class="items-table-wrapper">
+                        <h4>Line Items</h4>
+                        <table class="items-table">
+                            <thead>
+                                <tr>
+                                    <th>SKU</th>
+                                    <th>Description</th>
+                                    <th>Qty</th>
+                                    <th>Net Price</th>
+                                    <th>VAT%</th>
+                                    <th>Disc%</th>
+                                    <th>Total</th>
+                                </tr>
+                            </thead>
+                            <tbody id="itemsTableBody"></tbody>
+                        </table>
+                    </div>
+                    <div class="totals-bar">
+                        <div class="total-item"><span>Net</span><strong id="prevTotalNet"></strong></div>
+                        <div class="total-item"><span>VAT</span><strong id="prevTotalVat"></strong></div>
+                        <div class="total-item total-grand"><span>Total</span><strong id="prevTotalGross"></strong></div>
+                    </div>
+                    <div class="warnings-list" id="warningsList" style="display:none"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ==================== STEP 3: Run Automation ==================== -->
+        <section class="card card-run" id="stepRun">
+            <div class="card-header">
+                <span class="step-number">3</span>
+                <h2>Run Automation</h2>
+            </div>
+            <div class="card-body">
+                <div class="run-controls">
+                    <label class="toggle-option">
+                        <input type="checkbox" id="dryRunToggle" checked>
+                        <span class="toggle-slider"></span>
+                        <span class="toggle-label">Dry Run (extraction + validation only, no UI interaction)</span>
+                    </label>
+                    <button class="btn btn-accent btn-run" id="btnRun" onclick="runAutomation()">
+                        <span class="btn-icon">🚀</span> Start Automation
+                    </button>
+                </div>
+
+                <!-- Progress timeline -->
+                <div class="progress-timeline" id="progressTimeline" style="display:none">
+                    <h3>📋 Execution Progress</h3>
+                    <div class="timeline" id="timelineContent"></div>
+                </div>
+
+                <!-- Results -->
+                <div class="results-panel" id="resultsPanel" style="display:none">
+                    <div class="result-header" id="resultHeader">
+                        <div class="result-icon">✓</div>
+                        <div>
+                            <h3 id="resultTitle">Flow Completed</h3>
+                            <p id="resultSubtitle"></p>
+                        </div>
+                    </div>
+                    <div class="steps-completed" id="stepsCompleted"></div>
+                    <div class="screenshots-gallery" id="screenshotsGallery" style="display:none">
+                        <h4>📸 Milestone Screenshots</h4>
+                        <div class="gallery-grid" id="galleryGrid"></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <p>Fakturama Image-to-Cash Automation &bull; Built with Python, UIA, and Gemini</p>
+    </footer>
+
+    <script>
+        // =====================================================================
+        // State
+        // =====================================================================
+        let selectedImagePath = null;
+        let pollingInterval = null;
+
+        // =====================================================================
+        // File Upload / Selection
+        // =====================================================================
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('drag-over');
+        });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('drag-over');
+            if (e.dataTransfer.files.length) uploadFile(e.dataTransfer.files[0]);
+        });
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length) uploadFile(fileInput.files[0]);
+        });
+
+        async function uploadFile(file) {
+            const formData = new FormData();
+            formData.append('image', file);
+            try {
+                const resp = await fetch('/api/upload', { method: 'POST', body: formData });
+                const data = await resp.json();
+                if (data.success) {
+                    showSelection(data.filename, data.path);
+                } else {
+                    alert(data.error);
+                }
+            } catch (e) {
+                alert('Upload failed: ' + e.message);
+            }
+        }
+
+        // Sample selection
+        document.querySelectorAll('.sample-card').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const path = btn.dataset.path;
+                const name = btn.dataset.name;
+                try {
+                    const resp = await fetch('/api/select-sample', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ path })
+                    });
+                    const data = await resp.json();
+                    if (data.success) showSelection(name, path);
+                } catch (e) {
+                    alert('Selection failed: ' + e.message);
+                }
+            });
+        });
+
+        function showSelection(name, path) {
+            selectedImagePath = path;
+            document.getElementById('selectedFile').style.display = 'flex';
+            document.getElementById('selectedFileName').textContent = name;
+            dropZone.style.display = 'none';
+            document.querySelector('.samples-section')?.style && (document.querySelector('.samples-section').style.display = 'none');
+        }
+
+        function clearSelection() {
+            selectedImagePath = null;
+            document.getElementById('selectedFile').style.display = 'none';
+            dropZone.style.display = 'flex';
+            const ss = document.querySelector('.samples-section');
+            if (ss) ss.style.display = 'block';
+            document.getElementById('extractionPreview').style.display = 'none';
+        }
+
+        // Mode selector
+        document.querySelectorAll('.mode-option').forEach(opt => {
+            opt.addEventListener('click', () => {
+                document.querySelectorAll('.mode-option').forEach(o => o.classList.remove('active'));
+                opt.classList.add('active');
+            });
+        });
+
+        // =====================================================================
+        // Extract
+        // =====================================================================
+        async function extractData() {
+            if (!selectedImagePath) return alert('Please select an image first');
+            const mode = document.querySelector('input[name="mode"]:checked').value;
+            const btn = document.getElementById('btnExtract');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span> Extracting...';
+            setStatus('extracting', 'Extracting...');
+
+            try {
+                const resp = await fetch('/api/extract', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode })
+                });
+                const result = await resp.json();
+                btn.disabled = false;
+                btn.innerHTML = '<span class="btn-icon">🔍</span> Extract Data';
+
+                if (result.success) {
+                    showExtractedData(result.data);
+                    setStatus('extracted', 'Data Extracted');
+                } else {
+                    alert('Extraction failed: ' + result.error);
+                    setStatus('error', 'Extraction Failed');
+                }
+            } catch (e) {
+                btn.disabled = false;
+                btn.innerHTML = '<span class="btn-icon">🔍</span> Extract Data';
+                alert('Error: ' + e.message);
+                setStatus('error', 'Error');
+            }
+        }
+
+        function showExtractedData(data) {
+            const preview = document.getElementById('extractionPreview');
+            preview.style.display = 'block';
+
+            document.getElementById('prevDate').textContent = data.order_date;
+            document.getElementById('prevRef').textContent = data.external_reference;
+            document.getElementById('prevPayment').textContent = data.payment_method;
+            document.getElementById('prevStatus').textContent = data.paid_status;
+            document.getElementById('prevDebtor').textContent = data.debtor;
+            document.getElementById('prevCompany').textContent = data.debtor_company;
+
+            // Items table
+            const tbody = document.getElementById('itemsTableBody');
+            tbody.innerHTML = '';
+            data.items.forEach(item => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><code>${item.sku}</code></td>
+                    <td>${item.description}</td>
+                    <td>${item.qty}</td>
+                    <td>€${item.unit_net}</td>
+                    <td>${item.vat_pct}%</td>
+                    <td>${item.discount}%</td>
+                    <td><strong>€${item.line_total}</strong></td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            // Totals
+            document.getElementById('prevTotalNet').textContent = '€' + data.total_net;
+            document.getElementById('prevTotalVat').textContent = '€' + data.total_vat;
+            document.getElementById('prevTotalGross').textContent = '€' + data.total_gross;
+
+            // Warnings
+            const warnDiv = document.getElementById('warningsList');
+            if (data.warnings && data.warnings.length > 0) {
+                warnDiv.style.display = 'block';
+                warnDiv.innerHTML = data.warnings.map(w => `<div class="warning-item">⚠ ${w}</div>`).join('');
+                document.getElementById('extractionBadge').className = 'badge badge-warning';
+                document.getElementById('extractionBadge').textContent = 'Warnings';
+            } else {
+                warnDiv.style.display = 'none';
+                document.getElementById('extractionBadge').className = 'badge badge-success';
+                document.getElementById('extractionBadge').textContent = 'Validated ✓';
+            }
+
+            // Smooth scroll
+            preview.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        // =====================================================================
+        // Run Automation
+        // =====================================================================
+        async function runAutomation() {
+            if (!selectedImagePath) return alert('Please select and extract an image first');
+            const dryRun = document.getElementById('dryRunToggle').checked;
+            const btn = document.getElementById('btnRun');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span> Running...';
+            setStatus('running', 'Running...');
+
+            document.getElementById('progressTimeline').style.display = 'block';
+            document.getElementById('resultsPanel').style.display = 'none';
+            document.getElementById('timelineContent').innerHTML = '';
+
+            try {
+                await fetch('/api/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ dry_run: dryRun })
+                });
+                startPolling();
+            } catch (e) {
+                btn.disabled = false;
+                btn.innerHTML = '<span class="btn-icon">🚀</span> Start Automation';
+                alert('Error: ' + e.message);
+                setStatus('error', 'Error');
+            }
+        }
+
+        function startPolling() {
+            if (pollingInterval) clearInterval(pollingInterval);
+            pollingInterval = setInterval(async () => {
+                try {
+                    const resp = await fetch('/api/status');
+                    const state = await resp.json();
+                    updateProgress(state);
+
+                    if (state.status === 'done' || state.status === 'error') {
+                        clearInterval(pollingInterval);
+                        pollingInterval = null;
+                        const btn = document.getElementById('btnRun');
+                        btn.disabled = false;
+                        btn.innerHTML = '<span class="btn-icon">🚀</span> Start Automation';
+                        showResults(state);
+                    }
+                } catch (e) {
+                    console.error('Polling error:', e);
+                }
+            }, 500);
+        }
+
+        function updateProgress(state) {
+            const timeline = document.getElementById('timelineContent');
+            timeline.innerHTML = '';
+            (state.progress || []).forEach(p => {
+                const div = document.createElement('div');
+                div.className = 'timeline-item';
+                div.innerHTML = `
+                    <span class="tl-step">${p.step}</span>
+                    <span class="tl-message">${p.message}</span>
+                `;
+                timeline.appendChild(div);
+            });
+            timeline.scrollTop = timeline.scrollHeight;
+        }
+
+        function showResults(state) {
+            const panel = document.getElementById('resultsPanel');
+            panel.style.display = 'block';
+
+            const result = state.result || {};
+            const header = document.getElementById('resultHeader');
+            const title = document.getElementById('resultTitle');
+            const subtitle = document.getElementById('resultSubtitle');
+
+            if (result.success) {
+                header.className = 'result-header result-success';
+                document.querySelector('.result-icon').textContent = '✓';
+                title.textContent = 'Flow Completed Successfully';
+                subtitle.textContent = `${(result.steps_completed || []).length} steps completed`;
+                setStatus('done', 'Complete ✓');
+            } else {
+                header.className = 'result-header result-error';
+                document.querySelector('.result-icon').textContent = '✕';
+                title.textContent = 'Flow Stopped';
+                subtitle.textContent = result.error || 'Unknown error';
+                setStatus('error', 'Error');
+            }
+
+            // Steps list
+            const stepsDiv = document.getElementById('stepsCompleted');
+            stepsDiv.innerHTML = '';
+            (result.steps_completed || []).forEach(step => {
+                const div = document.createElement('div');
+                div.className = 'step-item';
+                div.innerHTML = `<span class="step-check">✓</span> ${step}`;
+                stepsDiv.appendChild(div);
+            });
+
+            // Screenshots
+            const milestones = result.milestones || [];
+            if (milestones.length > 0) {
+                const gallery = document.getElementById('screenshotsGallery');
+                gallery.style.display = 'block';
+                const grid = document.getElementById('galleryGrid');
+                grid.innerHTML = '';
+                milestones.forEach(m => {
+                    if (m.screenshot) {
+                        const filename = m.screenshot.split(/[/\\]/).pop();
+                        const div = document.createElement('div');
+                        div.className = 'gallery-item';
+                        div.innerHTML = `
+                            <img src="/screenshots/${filename}" alt="${m.step}" loading="lazy">
+                            <div class="gallery-label">${m.step}: ${m.description}</div>
+                        `;
+                        grid.appendChild(div);
+                    }
+                });
+            }
+
+            panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        // =====================================================================
+        // Global Status Badge
+        // =====================================================================
+        function setStatus(status, text) {
+            const badge = document.getElementById('globalStatus');
+            badge.className = 'status-badge status-' + status;
+            badge.querySelector('.status-text').textContent = text;
+        }
+    </script>
+</body>
+</html>
