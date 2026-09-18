@@ -9,6 +9,7 @@ pywin32>=306
 comtypes>=1.4
 
 # OCR / LLM extraction
+google-genai>=2.0.0
 google-generativeai>=0.8.0
 
 # Testing

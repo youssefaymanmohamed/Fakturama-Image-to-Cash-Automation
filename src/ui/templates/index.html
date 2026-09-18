@@ -162,11 +162,19 @@
             </div>
             <div class="card-body">
                 <div class="run-controls">
-                    <label class="toggle-option">
-                        <input type="checkbox" id="dryRunToggle" checked>
-                        <span class="toggle-slider"></span>
-                        <span class="toggle-label">Dry Run (extraction + validation only, no UI interaction)</span>
-                    </label>
+                    <div style="display: flex; flex-direction: column; gap: 8px;">
+                        <label class="toggle-option" style="cursor: pointer;">
+                            <input type="checkbox" id="dryRunToggle">
+                            <span class="toggle-slider"></span>
+                            <span class="toggle-label">
+                                <strong id="runModeTitle" style="color: #10b981;">⚡ LIVE AUTOMATION</strong>
+                                <span id="runModeDesc" style="color: #cbd5e1; font-size: 0.85rem; margin-left: 8px;">(Physically drives Fakturama UI)</span>
+                            </span>
+                        </label>
+                        <p id="runModeHelp" style="font-size: 0.8rem; color: #94a3b8; margin: 0;">
+                            Live mode will bring Fakturama to the front, open an Order, type fields, and save. (Toggle ON for dry-run simulation).
+                        </p>
+                    </div>
                     <button class="btn btn-accent btn-run" id="btnRun" onclick="runAutomation()">
                         <span class="btn-icon">🚀</span> Start Automation
                     </button>
@@ -294,6 +302,27 @@
                 }
             });
         });
+
+        // Dry Run vs Live toggle listener
+        const dryToggle = document.getElementById('dryRunToggle');
+        if (dryToggle) {
+            dryToggle.addEventListener('change', function() {
+                const title = document.getElementById('runModeTitle');
+                const desc = document.getElementById('runModeDesc');
+                const help = document.getElementById('runModeHelp');
+                if (this.checked) {
+                    title.textContent = '🧪 DRY RUN SIMULATION';
+                    title.style.color = '#f59e0b';
+                    desc.textContent = '(Simulation only — skips Fakturama)';
+                    help.textContent = 'Dry run validates the data and flow transitions without touching the open Fakturama application.';
+                } else {
+                    title.textContent = '⚡ LIVE AUTOMATION';
+                    title.style.color = '#10b981';
+                    desc.textContent = '(Physically drives Fakturama UI)';
+                    help.textContent = 'Live mode will bring Fakturama to the front, open an Order, type fields, and save. (Toggle ON for dry-run simulation).';
+                }
+            });
+        }
 
         // =====================================================================
         // Extract

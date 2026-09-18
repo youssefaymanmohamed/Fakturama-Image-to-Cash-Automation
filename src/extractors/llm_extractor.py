@@ -121,51 +121,73 @@ class LLMExtractor(BaseExtractor):
             raise ExtractionError(f"Image file not found: {image_path}")
 
         try:
-            import google.generativeai as genai
+            # Upload and read image
+            image_data = image_path.read_bytes()
+            mime_type = self._guess_mime(image_path)
 
-            genai.configure(api_key=self._api_key)
-
-            # Candidate models in priority order
             candidate_models = [self._model_name]
             for alt in ["gemini-3.5-flash", "gemini-3.6-flash", "gemini-flash-latest"]:
                 if alt not in candidate_models:
                     candidate_models.append(alt)
 
-            # Upload and send image
-            image_data = image_path.read_bytes()
-            mime_type = self._guess_mime(image_path)
-
-            response = None
+            raw_text = None
             used_model = None
             last_err = None
 
-            for m_name in candidate_models:
-                try:
-                    model = genai.GenerativeModel(m_name)
-                    response = model.generate_content(
-                        [
-                            EXTRACTION_PROMPT,
-                            {"mime_type": mime_type, "data": image_data},
-                        ],
-                        generation_config=genai.types.GenerationConfig(
-                            temperature=0.1,
-                            max_output_tokens=4096,
-                        ),
-                        request_options={"timeout": 60},
-                    )
-                    used_model = m_name
-                    break
-                except Exception as ex:
-                    last_err = ex
-                    err_str = str(ex).lower()
-                    if "quota" in err_str or "resourceexhausted" in err_str or "404" in err_str:
-                        continue
-                    raise
+            try:
+                import logging
+                logging.getLogger("google_genai").setLevel(logging.ERROR)
+                logging.getLogger("httpx").setLevel(logging.WARNING)
 
-            if response is None:
+                from google import genai
+                from google.genai import types
+
+                client = genai.Client(api_key=self._api_key)
+                part = types.Part.from_bytes(data=image_data, mime_type=mime_type)
+
+                for m_name in candidate_models:
+                    try:
+                        response = client.models.generate_content(
+                            model=m_name,
+                            contents=[EXTRACTION_PROMPT, part],
+                            config=types.GenerateContentConfig(
+                                temperature=0.1,
+                                max_output_tokens=4096,
+                            ),
+                        )
+                        raw_text = response.text.strip()
+                        used_model = m_name
+                        break
+                    except Exception as ex:
+                        last_err = ex
+                        err_str = str(ex).lower()
+                        if any(k in err_str for k in ["quota", "resourceexhausted", "404", "not_found", "429"]):
+                            continue
+                        raise
+
+            except ImportError:
+                import google.generativeai as legacy_genai
+                legacy_genai.configure(api_key=self._api_key)
+                for m_name in candidate_models:
+                    try:
+                        model = legacy_genai.GenerativeModel(m_name)
+                        response = model.generate_content(
+                            [EXTRACTION_PROMPT, {"mime_type": mime_type, "data": image_data}],
+                            generation_config=legacy_genai.types.GenerationConfig(temperature=0.1, max_output_tokens=4096),
+                            request_options={"timeout": 60},
+                        )
+                        raw_text = response.text.strip()
+                        used_model = m_name
+                        break
+                    except Exception as ex:
+                        last_err = ex
+                        err_str = str(ex).lower()
+                        if any(k in err_str for k in ["quota", "resourceexhausted", "404", "not_found", "429"]):
+                            continue
+                        raise
+
+            if raw_text is None:
                 raise last_err or ExtractionError("All candidate models failed")
-
-            raw_text = response.text.strip()
 
             # Print LLM response to terminal for inspection
             print("\n" + "=" * 65)
