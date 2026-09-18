@@ -78,9 +78,32 @@ class LLMExtractor(BaseExtractor):
     Requires the GOOGLE_API_KEY environment variable to be set.
     """
 
-    def __init__(self, model_name: str = "gemini-2.5-flash"):
+    def __init__(
+        self,
+        model_name: str = "gemini-2.5-flash",
+        api_key: str | None = None,
+    ):
         self._model_name = model_name
-        self._api_key = os.environ.get("GOOGLE_API_KEY", "")
+        self._api_key = (
+            api_key
+            or os.environ.get("GOOGLE_API_KEY")
+            or os.environ.get("GEMINI_API_KEY", "")
+        )
+
+        # Fallback: check for .env file in project root
+        if not self._api_key:
+            env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+            if env_path.exists():
+                try:
+                    for line in env_path.read_text(encoding="utf-8").splitlines():
+                        line = line.strip()
+                        if "=" in line and not line.startswith("#"):
+                            k, v = line.split("=", 1)
+                            if k.strip() in ("GOOGLE_API_KEY", "GEMINI_API_KEY"):
+                                self._api_key = v.strip().strip('"').strip("'")
+                                break
+                except Exception:
+                    pass
 
     def extract(self, image_path: Path) -> OrderData:
         if not self._api_key:

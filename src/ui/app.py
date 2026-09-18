@@ -116,10 +116,13 @@ def extract_data():
     """Extract data from the selected image."""
     data = request.get_json() or {}
     mode = data.get("mode", "mock")
+    api_key = data.get("api_key", "").strip() or None
 
     with _lock:
         image_path = _state["image_path"]
         _state["mode"] = mode
+        if api_key:
+            _state["api_key"] = api_key
         _state["status"] = "extracting"
         _state["progress"] = []
 
@@ -131,7 +134,7 @@ def extract_data():
     try:
         if mode == "llm":
             from src.extractors.llm_extractor import LLMExtractor
-            extractor = LLMExtractor()
+            extractor = LLMExtractor(api_key=api_key or _state.get("api_key"))
         else:
             extractor = MockExtractor()
 
@@ -187,7 +190,7 @@ def run_automation():
 
             if mode == "llm":
                 from src.extractors.llm_extractor import LLMExtractor
-                extractor = LLMExtractor()
+                extractor = LLMExtractor(api_key=_state.get("api_key"))
             else:
                 extractor = MockExtractor()
 

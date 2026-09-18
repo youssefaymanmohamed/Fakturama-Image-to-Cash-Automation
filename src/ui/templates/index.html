@@ -95,6 +95,14 @@
                         </div>
                     </label>
                 </div>
+
+                <div class="api-key-container" id="apiKeyContainer" style="display:none; margin: 14px 0;">
+                    <label style="font-size: 0.82rem; color: #94a3b8; display: block; margin-bottom: 6px;">
+                        Gemini API Key <span style="opacity: 0.6;">(or leave blank if set in <code>.env</code> / environment)</span>:
+                    </label>
+                    <input type="password" id="apiKeyInput" placeholder="AIzaSy..." style="width: 100%; box-sizing: border-box; padding: 10px 14px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; color: #f8fafc; font-family: inherit; font-size: 0.88rem;">
+                </div>
+
                 <button class="btn btn-primary btn-extract" id="btnExtract" onclick="extractData()">
                     <span class="btn-icon">🔍</span> Extract Data
                 </button>
@@ -278,6 +286,12 @@
             opt.addEventListener('click', () => {
                 document.querySelectorAll('.mode-option').forEach(o => o.classList.remove('active'));
                 opt.classList.add('active');
+                const radio = opt.querySelector('input[type="radio"]');
+                if (radio) radio.checked = true;
+                const apiKeyBox = document.getElementById('apiKeyContainer');
+                if (apiKeyBox) {
+                    apiKeyBox.style.display = opt.dataset.mode === 'llm' ? 'block' : 'none';
+                }
             });
         });
 
@@ -287,6 +301,9 @@
         async function extractData() {
             if (!selectedImagePath) return alert('Please select an image first');
             const mode = document.querySelector('input[name="mode"]:checked').value;
+            const apiKeyInput = document.getElementById('apiKeyInput');
+            const apiKey = apiKeyInput ? apiKeyInput.value.trim() : '';
+
             const btn = document.getElementById('btnExtract');
             btn.disabled = true;
             btn.innerHTML = '<span class="spinner"></span> Extracting...';
@@ -296,7 +313,7 @@
                 const resp = await fetch('/api/extract', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ mode })
+                    body: JSON.stringify({ mode, api_key: apiKey })
                 });
                 const result = await resp.json();
                 btn.disabled = false;
