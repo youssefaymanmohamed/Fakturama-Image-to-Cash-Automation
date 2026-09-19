@@ -138,13 +138,27 @@ def extract_data():
         return jsonify({"error": "No image selected"}), 400
 
     try:
+        warnings = []
         if mode == "ocr":
-            extractor = OCRExtractor()
+            try:
+                extractor = OCRExtractor()
+                order_data = extractor.extract(Path(image_path))
+                warnings = extractor.validate_extraction(order_data)
+            except Exception as ocr_err:
+                err_lower = str(ocr_err).lower()
+                if "tesseract" in err_lower or "not installed" in err_lower or "not in your path" in err_lower:
+                    logger.warning("[OCR] Tesseract binary not found, falling back to Gemini Vision")
+                    extractor = LLMExtractor(api_key=api_key or _state.get("api_key"))
+                    order_data = extractor.extract(Path(image_path))
+                    warnings = extractor.validate_extraction(order_data)
+                    warnings.insert(0, "Note: Local Tesseract OCR was not found on this system; successfully extracted via Gemini AI Vision.")
+                else:
+                    raise
         else:
             extractor = LLMExtractor(api_key=api_key or _state.get("api_key"))
+            order_data = extractor.extract(Path(image_path))
+            warnings = extractor.validate_extraction(order_data)
 
-        order_data = extractor.extract(Path(image_path))
-        warnings = extractor.validate_extraction(order_data)
         summary = order_data.to_summary_dict()
         summary["warnings"] = warnings
 
@@ -177,7 +191,7 @@ def run_automation():
         if _state["status"] == "running":
             return jsonify({"error": "Automation already running"}), 409
         image_path = _state["image_path"]
-        mode = _state.get("mode", "mock")
+        mode = _state.get("mode", "llm")
         cached_order_data = _state.get("current_order_data")
         _state["status"] = "running"
         _state["progress"] = []

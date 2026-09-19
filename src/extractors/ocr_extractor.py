@@ -256,8 +256,18 @@ class OCRExtractor(BaseExtractor):
             img = Image.open(image_path)
 
         config = "--oem 3 --psm 6"  # Assume uniform block of text
-        text = pytesseract.image_to_string(img, lang=self._lang, config=config)
-        return text
+        try:
+            text = pytesseract.image_to_string(img, lang=self._lang, config=config)
+            return text
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "not installed" in err_msg or "not in your path" in err_msg:
+                raise ExtractionError(
+                    "Tesseract OCR is not installed or not in PATH.\n\n"
+                    "👉 Recommended: Switch to 'AI Vision (Gemini)' mode for instant multimodal extraction.\n"
+                    "👉 Or install Tesseract on Windows: https://github.com/UB-Mannheim/tesseract/wiki"
+                )
+            raise ExtractionError(f"OCR failed: {e}")
 
     def _parse(self, text: str) -> OrderData:
         """Parse OCR text into OrderData."""
