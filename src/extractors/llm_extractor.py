@@ -137,8 +137,9 @@ class LLMExtractor(BaseExtractor):
             image_data, mime_type = self._optimize_image(raw_bytes)
 
             candidate_models = [self._model_name]
-            if "gemini-3.6-flash" not in candidate_models:
-                candidate_models.append("gemini-3.6-flash")
+            for alt in ["gemini-3.6-flash", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-flash-lite-latest"]:
+                if alt not in candidate_models:
+                    candidate_models.append(alt)
 
             raw_text = None
             used_model = None
@@ -166,7 +167,7 @@ class LLMExtractor(BaseExtractor):
                             config=types.GenerateContentConfig(
                                 response_mime_type="application/json",
                                 temperature=0.0,
-                                max_output_tokens=1500,
+                                max_output_tokens=8192,
                             ),
                         )
                         raw_text = response.text.strip()
@@ -186,7 +187,7 @@ class LLMExtractor(BaseExtractor):
                             [EXTRACTION_PROMPT, {"mime_type": mime_type, "data": image_data}],
                             generation_config=legacy_genai.types.GenerationConfig(
                                 temperature=0.0,
-                                max_output_tokens=1500,
+                                max_output_tokens=8192,
                                 response_mime_type="application/json",
                             ),
                             request_options={"timeout": 30},
@@ -213,11 +214,29 @@ class LLMExtractor(BaseExtractor):
                 print(safe_text)
             print("=" * 65 + "\n")
 
-            # Strip markdown code fences if present
-            clean_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
-            clean_text = re.sub(r"\s*```$", "", clean_text)
+            # Clean JSON string: extract content between first { and last }
+            clean_text = raw_text.strip()
+            if "{" in clean_text and "}" in clean_text:
+                start_idx = clean_text.find("{")
+                end_idx = clean_text.rfind("}")
+                clean_text = clean_text[start_idx : end_idx + 1]
+            else:
+                clean_text = re.sub(r"^```(?:json)?\s*", "", clean_text)
+                clean_text = re.sub(r"\s*```$", "", clean_text)
 
-            data = json.loads(clean_text)
+            try:
+                data = json.loads(clean_text)
+            except json.JSONDecodeError:
+                # Attempt to close open strings/brackets if truncated
+                repaired = clean_text.strip()
+                if repaired.count('"') % 2 != 0:
+                    repaired += '"'
+                open_brackets = repaired.count('[') - repaired.count(']')
+                open_braces = repaired.count('{') - repaired.count('}')
+                if open_brackets > 0 or open_braces > 0:
+                    repaired += (']' * max(0, open_brackets)) + ('}' * max(0, open_braces))
+                data = json.loads(repaired)
+
             order = OrderData(**data)
             _EXTRACTION_CACHE[cache_key] = order
             return order
