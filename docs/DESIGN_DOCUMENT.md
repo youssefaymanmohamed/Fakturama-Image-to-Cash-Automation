@@ -71,12 +71,12 @@ SWT applications can lag behind UIA tree updates. Our wrapper addresses this wit
 
 ### 3.1 Dual-Engine Architecture
 
-The extraction subsystem supports two engines through a common `BaseExtractor` interface:
+The extraction subsystem supports two production engines through a common `BaseExtractor` interface:
 
 | Engine | Use Case | Requirements |
 |---|---|---|
-| **Gemini LLM** | Production — real scanned/photographed POs | `GOOGLE_API_KEY` env var |
-| **Mock/Test** | Development, CI, offline demos | None |
+| **Gemini Multimodal Vision** | Primary — high-accuracy semantic and visual data extraction | `GOOGLE_API_KEY` |
+| **Tesseract OCR + Regex** | Offline / air-gapped environments without external API calls | Local Tesseract OCR binary |
 
 ### 3.2 LLM Prompt Engineering
 

@@ -66,42 +66,113 @@ class FakturamaApp:
     # ===================================================================
 
     def open_new_order(self) -> None:
-        """Step 1.3: Click Order in the top toolbar or navigation and wait for the editor."""
-        try:
-            # 1. Try toolbar button
-            try:
-                btn = self.uia.find_toolbar_button(TOOLBAR.ORDER_NEW)
-                self.uia.click(btn)
-            except UIAError:
-                # 2. Try by name in navigation tree or New panel
-                try:
-                    btn = self.uia.find_by_name("Order", partial=False)
-                    self.uia.click(btn)
-                except UIAError:
-                    # 3. Try partial name match
-                    btn = self.uia.find_by_name("Order", partial=True)
-                    self.uia.click(btn)
+        """Step 1.3: Open a new Order via toolbar, navigation, or menu bar."""
+        strategies_tried = []
 
-            time.sleep(1.5)
-            self._milestone("1.3", "New Order editor opened")
-        except UIAError as e:
-            raise UIAError(f"Failed to open New Order: {e}")
+        # Dismiss any lingering dialogs (e.g. Web Shop error from prior run)
+        try:
+            for _ in range(3):
+                dlg = self.uia.find_by_name("OK", timeout=1)
+                self.uia.click(dlg)
+                time.sleep(0.3)
+        except Exception:
+            pass
+        try:
+            auto.SendKeys("{Escape}")
+            time.sleep(0.2)
+        except Exception:
+            pass
+
+        # Strategy 1: Try toolbar button — EXACT match first to avoid Web Shop partial hit
+        toolbar_candidates = [
+            TOOLBAR.ORDER_NEW,  # "Order"
+            "New Order",
+            "Orders",
+            "Auftr\u00e4ge",  # German: Aufträge
+            "Auftrag",
+        ]
+        for name in toolbar_candidates:
+            try:
+                btn = self.uia.find_toolbar_button(name)
+                self.uia.click(btn)
+                time.sleep(2.0)
+                self._milestone("1.3", f"New Order editor opened (toolbar: {name})")
+                return
+            except UIAError:
+                strategies_tried.append(f"toolbar:'{name}'")
+
+        # Strategy 2: Navigation tree — look for "Order" in the left panel "New" section
+        nav_candidates = [
+            "Order", "New Order", "Orders",
+            "Auftr\u00e4ge", "Auftrag",
+        ]
+        for name in nav_candidates:
+            try:
+                btn = self.uia.find_by_name(name, partial=False, timeout=2)
+                ctrl_type = btn.ControlTypeName or ""
+                if ctrl_type in ("TabItemControl",):
+                    continue
+                self.uia.click(btn)
+                time.sleep(2.0)
+                self._milestone("1.3", f"New Order editor opened (nav: {name})")
+                return
+            except UIAError:
+                strategies_tried.append(f"nav:'{name}'")
+
+        # Strategy 3: Menu bar — File > New > Order (or similar)
+        try:
+            menu_paths = [
+                ["File", "Order"],
+                ["File", "New", "Order"],
+                ["Datei", "Auftrag"],
+                ["Datei", "Neu", "Auftrag"],
+            ]
+            for path in menu_paths:
+                try:
+                    for i, node in enumerate(path):
+                        el = self.uia.find_by_name(node, partial=False, timeout=2)
+                        self.uia.click(el)
+                        time.sleep(0.5 if i < len(path) - 1 else 2.0)
+                    self._milestone("1.3", f"New Order editor opened (menu: {' > '.join(path)})")
+                    return
+                except UIAError:
+                    strategies_tried.append(f"menu:{' > '.join(path)}")
+                    try:
+                        auto.SendKeys("{Escape}")
+                        time.sleep(0.2)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        raise UIAError(
+            f"Failed to open New Order. Tried: {', '.join(strategies_tried)}. "
+            "Run the UIA tree dump tool (scripts/dump_uia_tree.py) to discover "
+            "the correct element names."
+        )
 
     def set_order_date(self, order_date: str) -> None:
         """Step 1.5: Set the Order Date field."""
-        try:
-            self.uia.set_field_by_label(ORDER.ORDER_DATE, order_date)
-            self._milestone("1.5", f"Order date set to {order_date}")
-        except Exception as e:
-            logger.warning(f"Could not set order date: {e}")
+        # Try multiple label names since date field label varies
+        for label in [ORDER.ORDER_DATE, "Date", "Order Date", "Datum"]:
+            try:
+                self.uia.set_field_by_label(label, order_date, timeout=3)
+                self._milestone("1.5", f"Order date set to {order_date}")
+                return
+            except Exception:
+                pass
+        logger.warning(f"Could not set order date to '{order_date}' with any known label")
 
     def set_cust_ref(self, reference: str) -> None:
         """Step 1.6: Enter the external reference in Cust.Ref."""
-        try:
-            self.uia.set_field_by_label(ORDER.CUST_REF, reference)
-            self._milestone("1.6", f"Cust.Ref set to {reference}")
-        except Exception as e:
-            logger.warning(f"Could not set Cust.Ref: {e}")
+        for label in [ORDER.CUST_REF, "Cust.Ref.", "Cust. Ref.", "Customer Reference", "Reference", "Ref."]:
+            try:
+                self.uia.set_field_by_label(label, reference, timeout=3)
+                self._milestone("1.6", f"Cust.Ref set to {reference}")
+                return
+            except Exception:
+                pass
+        logger.warning(f"Could not set Cust.Ref to '{reference}' with any known label")
 
     def set_price_mode_net(self) -> None:
         """Step 1.7: Set document price mode to Net, keep VAT as With VAT."""
@@ -307,13 +378,17 @@ class FakturamaApp:
 
             # 2.11: Save the Debtor
             self.save_current()
-            time.sleep(1)
-
+            time.sleep(1.5)
             self._milestone("2.11", "Debtor saved")
 
             # Close Debtor editor tab to return focus to Order tab
+            # Use Ctrl+F4 — NOT Ctrl+W (Ctrl+W triggers Web Shop sync!)
             self.uia.close_active_tab()
-            time.sleep(0.5)
+            time.sleep(1.0)
+
+            # Explicitly switch back to the Order tab to confirm it's active
+            if not self.uia.switch_to_editor_tab("Order"):
+                logger.warning("Could not find Order tab after closing Debtor editor")
 
         except UIAError as e:
             raise UIAError(f"Failed to create debtor: {e}")
@@ -348,11 +423,20 @@ class FakturamaApp:
         Returns True if an exact match was found, False otherwise.
         """
         try:
+            # Always switch back to the Order tab first and wait for it to fully load
             self.uia.switch_to_editor_tab("Order")
-            time.sleep(0.5)
+            time.sleep(1.5)
 
+            # Try to find the product selector button using known names
             select_btn = None
-            for candidate in (DIALOG.SELECT_PRODUCT_DIALOG, "Select a product", "Select product"):
+            for candidate in (
+                DIALOG.SELECT_PRODUCT_DIALOG,  # "Select a product"
+                "Select a product",
+                "Select product",
+                "Select an item",
+                "Add item",
+                "Select",
+            ):
                 try:
                     select_btn = self.uia.find_by_name(candidate, partial=True, timeout=1.5)
                     break
@@ -360,39 +444,48 @@ class FakturamaApp:
                     pass
 
             if not select_btn:
-                # Spatial fallback: look near Items table
+                # Spatial fallback: Items table toolbar button is at the TOP-RIGHT of the section
                 try:
-                    items_table = self.uia.find_by_name("Items", partial=True, timeout=2)
+                    items_table = self.uia.find_by_name("Items", partial=False, timeout=2)
                     rect = items_table.BoundingRectangle
                     if rect and rect.width() > 0:
-                        select_btn = auto.ControlFromPoint(rect.left - 20, rect.top + 20)
+                        select_btn = auto.ControlFromPoint(rect.right - 30, rect.top + 10)
                 except Exception:
                     pass
 
             if select_btn:
                 self.uia.click(select_btn)
             else:
-                items_table = self.uia.find_by_name("Items", partial=True, timeout=3)
-                rect = items_table.BoundingRectangle
-                auto.Click(rect.left - 20, rect.top + 20)
-
-            time.sleep(1)
-
-            dialog = None
-            for dtitle in (DIALOG.SELECT_PRODUCT_DIALOG, "Select", "product", "Product"):
+                logger.warning("Could not find product selector button; using spatial fallback")
                 try:
-                    dialog = self.uia.wait_for_window(dtitle, timeout=4)
+                    items_table = self.uia.find_by_name("Items", partial=False, timeout=3)
+                    rect = items_table.BoundingRectangle
+                    auto.Click(rect.right - 30, rect.top + 10)
+                except Exception as e:
+                    logger.warning(f"Spatial fallback also failed: {e}")
+                    return False
+
+            time.sleep(1.5)
+
+            # Wait for the product selection dialog
+            dialog = None
+            for dtitle in ("Select a product", "Select", "product", "Product", "Item"):
+                try:
+                    dialog = self.uia.wait_for_window(dtitle, timeout=5)
                     break
                 except UIAError:
                     pass
 
             if not dialog:
-                logger.warning("Product dialog did not appear")
+                logger.warning("Product dialog did not appear after clicking selector")
                 return False
 
+            # Type SKU into the search field to filter the list
             search_field = None
             try:
-                search_field = self.uia.find_by_name(DIALOG.SEARCH_FIELD, parent=dialog, partial=True, timeout=2)
+                search_field = self.uia.find_by_name(
+                    DIALOG.SEARCH_FIELD, parent=dialog, partial=True, timeout=3
+                )
             except UIAError:
                 edits = self.uia.find_all_by_type("EditControl", parent=dialog)
                 if edits:
@@ -400,19 +493,22 @@ class FakturamaApp:
 
             if search_field:
                 self.uia.set_value(search_field, sku)
-                time.sleep(1)
+                time.sleep(1.5)  # Wait for list to filter
 
             self.uia.wait_for_stable_list(dialog)
 
+            # Confirm exact match and select
             found = self.uia.select_table_row(dialog, sku)
             if found:
                 ok_btn = self.uia.find_by_name(DIALOG.OK, parent=dialog, timeout=3)
                 self.uia.click(ok_btn)
+                time.sleep(1.0)
                 self._milestone("3.3", f"Product selected: {sku}")
                 return True
             else:
                 cancel_btn = self.uia.find_by_name(DIALOG.CANCEL, parent=dialog, timeout=3)
                 self.uia.click(cancel_btn)
+                time.sleep(0.5)
                 return False
 
         except UIAError as e:
@@ -489,12 +585,18 @@ class FakturamaApp:
 
             # 3.11: Save
             self.save_current()
-            time.sleep(1)
+            time.sleep(1.5)
             self._milestone("3.11", f"Product created: {item.sku}")
 
             # Close Product tab to return to Order tab
+            # Ctrl+F4 closes active Eclipse editor tab safely (Ctrl+W triggers Web Shop!)
             self.uia.close_active_tab()
-            time.sleep(0.5)
+            time.sleep(1.5)
+
+            # Explicitly switch back to the Order tab
+            if not self.uia.switch_to_editor_tab("Order"):
+                logger.warning("Could not switch back to Order tab after closing Product editor")
+            time.sleep(1.0)
 
         except UIAError as e:
             raise UIAError(f"Failed to create product: {e}")
@@ -518,13 +620,8 @@ class FakturamaApp:
     def save_current(self) -> None:
         """Save current document using Ctrl+S with toolbar fallback."""
         try:
-            self.uia.save_active_editor()
-            time.sleep(0.5)
-            try:
-                save_btn = self.uia.find_toolbar_button(TOOLBAR.SAVE)
-                self.uia.click(save_btn)
-            except Exception:
-                pass
+            candidates = [TOOLBAR.SAVE, "Save", "Speichern", "Speichern (Strg+S)", "Save (Ctrl+S)", "Save..."]
+            self.uia.save_active_editor(candidates)
             time.sleep(0.8)
             logger.info("Document saved")
         except UIAError as e:
@@ -557,15 +654,49 @@ class FakturamaApp:
 
     def create_followup_invoice(self) -> None:
         """
-        Step 4.6: From the saved Order, click Invoice in the follow-up area.
+        Step 4.6: From the saved Order, click Invoice in the follow-up document area.
+        
+        IMPORTANT: Do NOT use the Invoice toolbar button! That creates a standalone invoice.
+        The follow-up Invoice must be created from the Order's action buttons to preserve
+        the Order-Invoice relationship.
         """
         try:
-            invoice_btn = self.uia.find_by_name(
-                ORDER.FOLLOWUP_INVOICE, partial=True
-            )
-            self.uia.click(invoice_btn)
-            time.sleep(2)
-            self._milestone("4.6", "Follow-up Invoice created from Order")
+            # First, make sure the Order editor is in focus
+            self.uia.switch_to_editor_tab("Order")
+            time.sleep(1.0)
+
+            # Look specifically in the "Create a follow-up document" section
+            # These buttons are typically at the bottom of the Order editor
+            followup_candidates = [
+                "Invoice",       # English
+                "Rechnung",      # German
+                "Create Invoice",
+                "Follow-up Invoice",
+            ]
+            for candidate in followup_candidates:
+                try:
+                    # Use partial=False to avoid matching the main toolbar Invoice button
+                    # Search with a timeout and exclude ToolBarControl elements
+                    btn = self.uia.find_by_name(candidate, control_type="ButtonControl", timeout=3)
+                    self.uia.click(btn)
+                    time.sleep(2.5)
+                    self._milestone("4.6", f"Follow-up Invoice created (button: {candidate})")
+                    return
+                except UIAError:
+                    pass
+
+            # Fallback: use partial match but be explicit about what we're looking for
+            try:
+                btn = self.uia.find_by_name(
+                    ORDER.FOLLOWUP_INVOICE, partial=True, timeout=5
+                )
+                self.uia.click(btn)
+                time.sleep(2.5)
+                self._milestone("4.6", "Follow-up Invoice created from Order")
+                return
+            except UIAError as e:
+                raise UIAError(f"Failed to find follow-up Invoice button: {e}")
+
         except UIAError as e:
             raise UIAError(f"Failed to create follow-up invoice: {e}")
 
@@ -639,14 +770,21 @@ class FakturamaApp:
             logger.warning(f"Could not set field '{field_name}' to '{value}'")
 
     def _navigate_to(self, *path: str) -> None:
-        """Navigate through the left-panel tree by clicking each node."""
+        """Navigate through the left-panel tree by clicking each node (exact match)."""
         for node_name in path:
             try:
-                node = self.uia.find_by_name(node_name, partial=True, timeout=5)
+                # Use exact match for navigation to avoid hitting Web Shop or other items
+                node = self.uia.find_by_name(node_name, partial=False, timeout=5)
                 self.uia.click(node)
-                time.sleep(0.5)
+                time.sleep(0.7)
             except UIAError:
-                logger.warning(f"Navigation node not found: {node_name}")
+                # Fallback: try partial match if exact not found
+                try:
+                    node = self.uia.find_by_name(node_name, partial=True, timeout=3)
+                    self.uia.click(node)
+                    time.sleep(0.7)
+                except UIAError:
+                    logger.warning(f"Navigation node not found: {node_name}")
 
     def _search_in_list(self, search_text: str) -> bool:
         """Search for text in the current list/table view."""
@@ -677,6 +815,7 @@ class FakturamaApp:
     def _set_payment_method_on_debtor(self, payment_method: str) -> None:
         """
         Steps 2.10-2.10.6: Set payment method on debtor, creating it if needed.
+        After creation, returns to the Debtor editor tab and selects the new method.
         """
         try:
             # Open Payment tab
@@ -725,10 +864,26 @@ class FakturamaApp:
                 self._set_field_safe(PAYMENT.NET_DAYS, "0")
 
                 self.save_current()
+                time.sleep(1.0)
                 self._milestone("2.10.6", f"Payment method created: {payment_method}")
 
-            # Return to debtor editor and select the payment method
-            # (The debtor editor tab should still be open)
+            # Return to the Debtor editor tab and select the payment method
+            if not self.uia.switch_to_editor_tab("Contact"):
+                if not self.uia.switch_to_editor_tab("Debtor"):
+                    if not self.uia.switch_to_editor_tab("New Contact"):
+                        logger.warning("Could not switch back to Debtor editor after payment method creation")
+            time.sleep(0.5)
+
+            # Navigate to Payment tab and select the method
+            try:
+                pay_tab2 = self.uia.find_by_name(CONTACT.PAYMENT_TAB, partial=True, timeout=3)
+                self.uia.click(pay_tab2)
+                time.sleep(0.5)
+                pay_combo2 = self.uia.find_by_name(CONTACT.PAYMENT_METHOD, partial=True, timeout=3)
+                self.uia.select_combo_item(pay_combo2, payment_method)
+                self._milestone("2.10", f"Payment method set on debtor: {payment_method}")
+            except UIAError as e:
+                logger.warning(f"Could not select payment method on debtor after creation: {e}")
 
         except UIAError as e:
             logger.warning(f"Payment method setup failed: {e}")

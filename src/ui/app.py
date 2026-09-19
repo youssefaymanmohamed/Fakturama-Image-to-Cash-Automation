@@ -24,8 +24,9 @@ from flask import Flask, jsonify, render_template, request, send_from_directory
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from src.extractors.mock_extractor import MockExtractor
 from src.extractors.base import ExtractionError
+from src.extractors.llm_extractor import LLMExtractor
+from src.extractors.ocr_extractor import OCRExtractor
 from src.models.order import OrderData
 
 logger = logging.getLogger(__name__)
@@ -48,7 +49,7 @@ _state = {
     "result": None,         # FlowResult.to_dict()
     "extracted_data": None, # OrderData.to_summary_dict()
     "image_path": None,
-    "mode": "mock",         # mock | llm
+    "mode": "llm",          # llm | ocr
 }
 _lock = threading.Lock()
 
@@ -99,44 +100,28 @@ def upload_image():
 
 @app.route("/api/select-sample", methods=["POST"])
 def select_sample():
-    """Select a sample image and auto-extract instantly via fast local sidecar."""
-    data = request.get_json()
+    """Select a sample image."""
+    data = request.get_json() or {}
     path = data.get("path", "")
-    if not Path(path).exists():
+    if not path or not Path(path).exists():
         return jsonify({"error": f"Sample not found: {path}"}), 404
 
     with _lock:
         _state["image_path"] = path
+        _state["extracted_data"] = None
+        _state["current_order_data"] = None
+        _state["status"] = "image_selected"
+        _state["progress"] = []
+        _state["result"] = None
 
-    # Auto-extract instantly for fast UI preview (< 0.01s)
-    try:
-        extractor = MockExtractor()
-        order_data = extractor.extract(Path(path))
-        warnings = extractor.validate_extraction(order_data)
-        summary = order_data.to_summary_dict()
-        summary["warnings"] = warnings
-
-        with _lock:
-            _state["extracted_data"] = summary
-            _state["current_order_data"] = order_data
-            _state["status"] = "extracted"
-
-        print("\n" + "=" * 65, flush=True)
-        print(f"  [SAMPLE ORDER LOADED: {Path(path).name}]", flush=True)
-        print("=" * 65, flush=True)
-        print(json.dumps(summary, indent=2), flush=True)
-        print("=" * 65 + "\n", flush=True)
-
-        return jsonify({"success": True, "path": path, "data": summary})
-    except Exception:
-        return jsonify({"success": True, "path": path})
+    return jsonify({"success": True, "path": path})
 
 
 @app.route("/api/extract", methods=["POST"])
 def extract_data():
     """Extract data from the selected image."""
     data = request.get_json() or {}
-    mode = data.get("mode", "mock")
+    mode = data.get("mode", "llm")
     api_key = data.get("api_key", "").strip() or None
 
     with _lock:
@@ -153,11 +138,10 @@ def extract_data():
         return jsonify({"error": "No image selected"}), 400
 
     try:
-        if mode == "llm":
-            from src.extractors.llm_extractor import LLMExtractor
-            extractor = LLMExtractor(api_key=api_key or _state.get("api_key"))
+        if mode == "ocr":
+            extractor = OCRExtractor()
         else:
-            extractor = MockExtractor()
+            extractor = LLMExtractor(api_key=api_key or _state.get("api_key"))
 
         order_data = extractor.extract(Path(image_path))
         warnings = extractor.validate_extraction(order_data)
@@ -231,11 +215,10 @@ def run_automation():
             from src.automation.uia_wrapper import UIAWrapper
             from src.flow.orchestrator import Orchestrator
 
-            if mode == "llm":
-                from src.extractors.llm_extractor import LLMExtractor
-                extractor = LLMExtractor(api_key=_state.get("api_key"))
+            if mode == "ocr":
+                extractor = OCRExtractor()
             else:
-                extractor = MockExtractor()
+                extractor = LLMExtractor(api_key=_state.get("api_key"))
 
             uia = None if dry_run else UIAWrapper(screenshot_dir=str(SCREENSHOTS_DIR))
             orch = Orchestrator(extractor, uia, dry_run=dry_run)

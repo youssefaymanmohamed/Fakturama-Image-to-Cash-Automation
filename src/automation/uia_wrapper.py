@@ -186,13 +186,26 @@ class UIAWrapper:
     def attach_or_launch(
         self,
         exe_path: str = r"C:\Program Files\Fakturama2\Fakturama.exe",
-        timeout: int = 45,
+        timeout: int = 90,
     ) -> auto.WindowControl:
         """Attach to a running Fakturama instance or launch a new one."""
         try:
-            return self.find_fakturama_window(timeout=3)
+            return self.find_fakturama_window(timeout=5)
         except UIAError:
             pass
+
+        # Clean up workspace lock files that prevent launch
+        for lock_path in [
+            os.path.expandvars(r"%USERPROFILE%\.fakturama2\workspace\.metadata\.lock"),
+            os.path.expandvars(r"%USERPROFILE%\.fakturama2\.metadata\.lock"),
+            os.path.expandvars(r"%APPDATA%\Fakturama2\workspace\.metadata\.lock"),
+        ]:
+            try:
+                if os.path.exists(lock_path):
+                    os.remove(lock_path)
+                    logger.info(f"Removed workspace lock: {lock_path}")
+            except Exception:
+                pass
 
         # Check for candidates to launch
         found_exe = None
@@ -244,6 +257,7 @@ class UIAWrapper:
         """
         Find a UI element by its accessible Name property.
         Uses substring matching when partial=True.
+        Optimized with early-termination search to avoid full tree walks.
         """
         timeout = timeout or self.FIND_TIMEOUT
         parent = parent or self.get_root()
@@ -251,18 +265,10 @@ class UIAWrapper:
 
         while time.time() < deadline:
             try:
-                children = self._walk_tree(parent, max_depth=15)
-                for el in children:
-                    el_name = el.Name or ""
-                    if partial:
-                        match = name.lower() in el_name.lower()
-                    else:
-                        match = el_name == name
-
-                    if match:
-                        if control_type and el.ControlTypeName != control_type:
-                            continue
-                        return el
+                # Use early-termination search (much faster for large trees)
+                result = self._find_first(parent, name, control_type, partial, max_depth=15)
+                if result is not None:
+                    return result
             except Exception as e:
                 logger.debug(f"find_by_name retry: {e}")
             time.sleep(0.5)
@@ -325,18 +331,28 @@ class UIAWrapper:
         """
         parent = parent or self.get_root()
         toolbars = self.find_all_by_type("ToolBarControl", parent)
+        
+        # Pass 1: Exact match in toolbars
         for tb in toolbars:
             items = self._walk_tree(tb, max_depth=4)
             for item in items:
                 item_name = (item.Name or "").strip()
-                if item_name.lower() == name.lower() or name.lower() in item_name.lower():
+                if item_name.lower() == name.lower():
                     return item
 
-        # Also search top-level buttons / menu items if not in ToolBarControl
+        # Pass 2: Exact match on top-level buttons/menus
         for item in self._walk_tree(parent, max_depth=6):
             if item.ControlTypeName in ("ButtonControl", "MenuItemControl", "ToolItemControl", "HyperlinkControl"):
                 item_name = (item.Name or "").strip()
                 if item_name.lower() == name.lower():
+                    return item
+                    
+        # Pass 3: Partial match in toolbars (explicitly exclude 'web shop' to avoid catastrophic misclicks)
+        for tb in toolbars:
+            items = self._walk_tree(tb, max_depth=4)
+            for item in items:
+                item_name = (item.Name or "").strip().lower()
+                if name.lower() in item_name and "web shop" not in item_name:
                     return item
 
         raise UIAError(f"Toolbar button not found: '{name}'")
@@ -425,17 +441,7 @@ class UIAWrapper:
         delay = delay or self.ACTION_DELAY
         target = self.find_input_for_label(element)
 
-        # 1. Try ValuePattern
-        try:
-            vp = target.GetValuePattern()
-            if vp:
-                vp.SetValue(value)
-                time.sleep(delay)
-                return
-        except Exception:
-            pass
-
-        # 2. Try focus + keyboard on target
+        # 1. Try focus + keyboard on target (best for SWT to trigger ModifyEvents)
         try:
             rect = target.BoundingRectangle
             if rect and rect.width() > 0 and rect.height() > 0:
@@ -452,6 +458,19 @@ class UIAWrapper:
             auto.SendKeys("{Tab}")
             time.sleep(delay)
             return
+        except Exception:
+            pass
+
+        # 2. Try ValuePattern as fallback (with Tab to commit in SWT)
+        try:
+            vp = target.GetValuePattern()
+            if vp:
+                vp.SetValue(value)
+                time.sleep(0.1)
+                # Also send Tab to trigger SWT ModifyEvent listeners
+                auto.SendKeys("{Tab}")
+                time.sleep(delay)
+                return
         except Exception:
             pass
 
@@ -489,30 +508,45 @@ class UIAWrapper:
         except Exception as e:
             raise UIAError(f"Could not set field '{label_name}' to '{value}': {e}")
 
-    def save_active_editor(self):
-        """Save the active editor tab using Ctrl+S with toolbar fallback."""
+    def save_active_editor(self, save_btn_names: list[str] = None):
+        """Save the active editor tab using Ctrl+S. The editor must already have focus."""
+        # NOTE: Do NOT call root.SetFocus() here — focusing the root window before
+        # Ctrl+S can accidentally trigger the Web Shop sync shortcut instead of saving.
         try:
             auto.SendKeys("{Ctrl}s")
-            time.sleep(0.5)
-        except Exception:
-            pass
-        try:
-            btn = self.find_toolbar_button("Save")
-            if btn:
-                self.click(btn)
-                time.sleep(0.5)
+            time.sleep(0.7)
         except Exception:
             pass
 
+        if not save_btn_names:
+            save_btn_names = ["Save"]
+
+        for name in save_btn_names:
+            try:
+                btn = self.find_toolbar_button(name)
+                if btn:
+                    self.click(btn)
+                    time.sleep(0.5)
+                    return
+            except Exception:
+                pass
+
     def close_active_tab(self):
-        """Close current editor tab in Fakturama with Ctrl+W."""
+        """Close current editor tab using Ctrl+F4 (Eclipse 'close editor').
+        
+        IMPORTANT: Do NOT use Ctrl+W here!
+        In Fakturama, Ctrl+W triggers 'Web Shop sync' when the main window has focus.
+        Ctrl+F4 is the correct Eclipse RCP shortcut to close the active editor tab.
+        """
         try:
-            root = self.get_root()
-            root.SetFocus()
+            auto.SendKeys("{Ctrl}{F4}")
         except Exception:
-            pass
-        auto.SendKeys("{Ctrl}w")
-        time.sleep(0.8)
+            # Last resort: Alt+F4 on the tab, or try clicking the tab close button
+            try:
+                auto.SendKeys("{Ctrl}w")  # Only as last resort when Ctrl+F4 fails
+            except Exception:
+                pass
+        time.sleep(1.0)  # Give Eclipse time to close and re-focus the next tab
 
 
     def switch_to_editor_tab(self, tab_title_part: str) -> bool:
@@ -526,11 +560,11 @@ class UIAWrapper:
                         sp = t.GetSelectionItemPattern()
                         if sp:
                             sp.Select()
-                            time.sleep(0.5)
+                            time.sleep(0.8)  # Wait for Eclipse to load the tab content
                             return True
                     except Exception:
                         self.click(t)
-                        time.sleep(0.5)
+                        time.sleep(0.8)
                         return True
         except Exception:
             pass
@@ -616,9 +650,14 @@ class UIAWrapper:
         )
 
     def wait_for_window(self, title: str, timeout: float = 15) -> auto.WindowControl:
-        """Wait for a window with the given title to appear."""
+        """Wait for a window with the given title to appear.
+        
+        Searches both top-level desktop windows AND child windows/dialogs
+        within the main Fakturama window (SWT dialogs are often children).
+        """
         deadline = time.time() + timeout
         while time.time() < deadline:
+            # 1. Search top-level windows
             try:
                 for win in auto.GetRootControl().GetChildren():
                     win_name = win.Name or ""
@@ -626,6 +665,19 @@ class UIAWrapper:
                         return win
             except Exception:
                 pass
+
+            # 2. Search within the main Fakturama window (SWT child dialogs)
+            if self._root_window:
+                try:
+                    children = self._walk_tree(self._root_window, max_depth=5)
+                    for child in children:
+                        if child.ControlTypeName in ("WindowControl", "PaneControl", "DialogControl", "GroupControl"):
+                            child_name = child.Name or ""
+                            if title.lower() in child_name.lower():
+                                return child
+                except Exception:
+                    pass
+
             time.sleep(0.5)
         raise UIAError(f"Window not found: '{title}'")
 
@@ -722,6 +774,34 @@ class UIAWrapper:
     # -----------------------------------------------------------------------
     # Internal helpers
     # -----------------------------------------------------------------------
+
+    def _find_first(self, root, name: str, control_type: str = "",
+                    partial: bool = False, max_depth: int = 15, _depth: int = 0):
+        """Early-termination tree search — returns first match without collecting all elements."""
+        if _depth >= max_depth:
+            return None
+        try:
+            for child in root.GetChildren():
+                el_name = child.Name or ""
+                if partial:
+                    match = name.lower() in el_name.lower()
+                    # Prevent accidental matches against the "Web Shop" button with generic words like "Order" or "Product"
+                    if match and "web shop" in el_name.lower() and "web shop" not in name.lower():
+                        match = False
+                else:
+                    match = el_name == name
+                if match:
+                    if control_type and child.ControlTypeName != control_type:
+                        pass  # type mismatch, keep looking
+                    else:
+                        return child
+                # Recurse
+                result = self._find_first(child, name, control_type, partial, max_depth, _depth + 1)
+                if result is not None:
+                    return result
+        except Exception:
+            pass
+        return None
 
     def _walk_tree(self, root, max_depth: int = 10, _depth: int = 0) -> list:
         """Recursively walk the UIA tree and collect all elements."""

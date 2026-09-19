@@ -91,7 +91,7 @@ class LLMExtractor(BaseExtractor):
         self._model_name = (
             model_name
             or os.environ.get("GEMINI_MODEL")
-            or "gemini-3.5-flash"
+            or "gemini-3.6-flash"
         )
         self._api_key = (
             api_key
@@ -123,18 +123,10 @@ class LLMExtractor(BaseExtractor):
             print(f"[CACHE HIT] Returning cached extraction for {image_path.name}")
             return _EXTRACTION_CACHE[cache_key]
 
-        sidecar_path = image_path.with_suffix(".json")
-
         if not self._api_key:
-            if sidecar_path.exists():
-                print(f"[SIDECAR] No API key set, loading sidecar: {sidecar_path.name}")
-                data = json.loads(sidecar_path.read_text(encoding="utf-8"))
-                order = OrderData(**data)
-                _EXTRACTION_CACHE[cache_key] = order
-                return order
             raise ExtractionError(
                 "GOOGLE_API_KEY environment variable is not set. "
-                "Set it or switch to Mock / Test mode for instant offline testing."
+                "Please configure GOOGLE_API_KEY in your .env file, environment, or web dashboard."
             )
 
         if not image_path.exists():
@@ -145,9 +137,8 @@ class LLMExtractor(BaseExtractor):
             image_data, mime_type = self._optimize_image(raw_bytes)
 
             candidate_models = [self._model_name]
-            for alt in ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash"]:
-                if alt not in candidate_models:
-                    candidate_models.append(alt)
+            if "gemini-3.6-flash" not in candidate_models:
+                candidate_models.append("gemini-3.6-flash")
 
             raw_text = None
             used_model = None
@@ -163,7 +154,7 @@ class LLMExtractor(BaseExtractor):
 
                 client = genai.Client(
                     api_key=self._api_key,
-                    http_options={"timeout": 10},
+                    http_options={"timeout": 60000},
                 )
                 part = types.Part.from_bytes(data=image_data, mime_type=mime_type)
 
@@ -183,11 +174,6 @@ class LLMExtractor(BaseExtractor):
                         break
                     except Exception as ex:
                         last_err = ex
-                        err_str = str(ex).lower()
-                        # If quota exhausted, 404, or 503, immediately fall back if sidecar exists
-                        if "quota" in err_str or "resourceexhausted" in err_str:
-                            if sidecar_path.exists():
-                                break
                         continue
 
             except ImportError:
@@ -203,7 +189,7 @@ class LLMExtractor(BaseExtractor):
                                 max_output_tokens=1500,
                                 response_mime_type="application/json",
                             ),
-                            request_options={"timeout": 10},
+                            request_options={"timeout": 30},
                         )
                         raw_text = response.text.strip()
                         used_model = m_name
@@ -213,14 +199,8 @@ class LLMExtractor(BaseExtractor):
                         continue
 
             if raw_text is None:
-                # If Gemini is experiencing 503/429 spikes and a local sidecar exists, seamlessly fall back
-                if sidecar_path.exists():
-                    print(f"\n[FAST FALLBACK] Gemini API unavailable or quota reached ({last_err}), using instant local verified data for {image_path.name}")
-                    data = json.loads(sidecar_path.read_text(encoding="utf-8"))
-                    order = OrderData(**data)
-                    _EXTRACTION_CACHE[cache_key] = order
-                    return order
-                raise last_err or ExtractionError("All candidate models failed")
+                raise last_err or ExtractionError("All candidate Gemini models failed to extract data.")
+
 
             # Print LLM response to terminal for inspection
             print("\n" + "=" * 65)
@@ -250,12 +230,6 @@ class LLMExtractor(BaseExtractor):
                 "Run: pip install google-generativeai"
             )
         except Exception as e:
-            if sidecar_path.exists():
-                print(f"\n[FAST FALLBACK] LLM error ({e}), using instant local verified data for {image_path.name}")
-                data = json.loads(sidecar_path.read_text(encoding="utf-8"))
-                order = OrderData(**data)
-                _EXTRACTION_CACHE[cache_key] = order
-                return order
             raise ExtractionError(f"LLM extraction failed: {e}")
 
     @staticmethod

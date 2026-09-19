@@ -20,4 +20,10 @@ artifacts/screenshots/
 *.db
 *.hsqldb
 @AutomationLog.txt
+.pytest_cache/
+scratch/
+workspace/
+uia_tree.txt
+data/uploads/*
+!data/uploads/.gitkeep
 

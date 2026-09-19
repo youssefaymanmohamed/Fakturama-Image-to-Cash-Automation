@@ -11,6 +11,7 @@ comtypes>=1.4
 # OCR / LLM extraction
 google-genai>=2.0.0
 google-generativeai>=0.8.0
+pytesseract>=0.3.10
 
 # Testing
 pytest>=8.0
@@ -18,3 +19,4 @@ pytest>=8.0
 # Utilities
 python-dateutil>=2.8
 python-dotenv>=1.0
+psutil>=5.9

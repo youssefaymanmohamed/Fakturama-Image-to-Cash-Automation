@@ -266,14 +266,8 @@ def generate_samples(output_dir: Path):
 
     for name, data in [("purchase_order_01", sample1), ("purchase_order_02_multi", sample2)]:
         img_path = output_dir / f"{name}.png"
-        json_path = output_dir / f"{name}.json"
-
         draw_purchase_order(data, img_path)
-        with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-
         print(f"Generated: {img_path}")
-        print(f"Generated: {json_path}")
 
 
 if __name__ == "__main__":

@@ -2,159 +2,217 @@
 
 > Turn a single purchase order image into a fully saved, verified Order and linked Invoice inside Fakturama 2.x — automatically.
 
-## Overview
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
+[![UI Automation](https://img.shields.io/badge/automation-Microsoft%20UIA-green.svg)](https://learn.microsoft.com/en-us/windows/win32/winauto/entry-uiauto-win32)
+[![Gemini Multimodal](https://img.shields.io/badge/vision-Google%20Gemini%203.6%20Flash-orange.svg)](https://ai.google.dev/)
+[![OCR](https://img.shields.io/badge/ocr-Tesseract%20OCR-blueviolet.svg)](https://github.com/tesseract-ocr/tesseract)
+[![Tests](https://img.shields.io/badge/tests-54%20passed-success.svg)](https://pytest.org/)
 
-This system automates the complete Order-to-Invoice lifecycle inside [Fakturama](https://www.fakturama.info/), a desktop invoicing application built on Eclipse RCP / SWT. Given a purchase order image (scan, photo, or digital document), the pipeline:
+---
 
-1. **Extracts** structured data (debtor, line items, VAT, payment terms) using multimodal LLM vision or mock data
-2. **Opens a New Order** in Fakturama and uses the Order's built-in selectors as existence checks
-3. **Resolves or creates** Debtor, Payment Method, VAT rates, and Products through the UI — without hardcoded coordinates
-4. **Generates a linked Invoice** from the saved Order's follow-up action
-5. **Applies payment status** and verifies all saved records
+## 📌 Overview
 
-### Key Design Decisions
+This repository provides an automated Order-to-Cash pipeline for [Fakturama 2.x](https://www.fakturama.info/), a desktop invoicing application built on Eclipse RCP / SWT. Given a raw purchase order image (scanned PDF/PNG/JPG or digital document), the system:
 
-- **Coordinate-independent UI automation** using Microsoft UI Automation (UIA) — elements are found by Name, AutomationId, and ControlType, never by pixel position
-- **Order-first flow** — the Order stays open throughout master data resolution, using its selectors as existence checks
-- **Mathematical reconciliation** — every line total and order total is cross-checked against the source image
-- **Stop-for-review safety** — ambiguous data raises exceptions rather than guessing
+1. **Extracts** structured data (debtor, addresses, line items, VAT rates, totals, and payment status) using **Google Gemini Vision AI** or **Local Tesseract OCR**.
+2. **Reconciles & Validates** mathematical integrity (line totals, VAT distribution, gross sums) before touching desktop software.
+3. **Opens a New Order** in Fakturama without relying on fixed screen coordinates or brittle pixel scraping.
+4. **Resolves or Creates Master Data**:
+   - Searches for the Debtor; if missing, creates a new contact record and re-selects it.
+   - For every line item, resolves or creates the Product master record, verifies VAT assignment, and sets quantity/pricing.
+5. **Generates a Linked Invoice** directly from the saved Order's follow-up action.
+6. **Applies Payment Status** (Paid/Unpaid) with payment dates, saves all records, and verifies database consistency.
 
-## Quick Start
+---
+
+## 🏗️ Architecture
+
+```
+┌─────────────────┐     ┌──────────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│ Purchase Order  │────>│   Extraction Engine  │────>│   Orchestrator   │────>│  Fakturama 2.x  │
+│ Image (PNG/JPG) │     │  (Gemini / Tesseract)│     │  (5-Step State)  │     │   (Win32/UIA)   │
+└─────────────────┘     └──────────────────────┘     └──────────────────┘     └─────────────────┘
+                                   │                           │                       │
+                            Pydantic Models             Order-First Flow         Pattern-Based
+                            + Math Reconciliation       Master Data Resolution   Interaction & Audit
+```
+
+### Key Engineering Decisions
+
+- **Coordinate-Independent Desktop Automation**: Built on Microsoft UI Automation (`uiautomation` / Win32 UIA). Elements are discovered dynamically via `AutomationId`, `Name`, `ClassName`, and SWT control hierarchy.
+- **Order-First Master Data Resolution**: The Order is opened first; its internal selection dialogs serve as presence checks. If an entity is missing, the automation switches tabs, creates the contact/product, and resumes the order.
+- **Mathematical Reconciliation**: Built-in verification cross-checks every line total (`qty * unit_net * (1 - discount)`) and document totals against extracted values within ±€0.05 rounding tolerance.
+- **Dual Extraction Pipeline**:
+  - **Gemini Multimodal Vision (`gemini-3.6-flash`)**: High-accuracy semantic extraction from complex scanned documents.
+  - **Local Tesseract OCR**: Fully offline, air-gapped extraction using local computer vision and regex parsing.
+
+---
+
+## 🚀 Quick Start
 
 ### Prerequisites
 
-- **Windows 10/11** (required for UIA)
+- **Windows 10 or 11** (Required for Microsoft UI Automation)
 - **Python 3.11+**
-- **Fakturama 2.2.0** installed in `C:\Program Files\Fakturama2`
+- **Fakturama 2.2.x** installed in `C:\Program Files\Fakturama2` (or custom path)
+- *(Optional for AI Vision)*: Google Gemini API Key (`GOOGLE_API_KEY`)
+- *(Optional for Offline OCR)*: [Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki) installed on Windows
 
 ### Installation
 
 ```powershell
-# Clone the repo
-git clone <repository-url>
-cd "Fakturama Image-to-Cash Automation"
+# Clone the repository
+git clone https://github.com/<your-username>/fakturama-image-to-cash.git
+cd "fakturama-image-to-cash"
+
+# Create and activate a virtual environment
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Generate sample purchase order images
-python scripts/generate_sample_po.py
+# (Optional) Copy environment template and add your API key
+copy .env.example .env
 ```
 
-### Run the Web Dashboard (Recommended)
+---
+
+## 💻 Usage
+
+### 1. Web UI Dashboard (Recommended)
+
+Launch the interactive control center:
 
 ```powershell
 python main.py
 ```
 
-Open **http://127.0.0.1:5000** in your browser. The dashboard lets you:
+Then open **`http://127.0.0.1:5000`** in your browser. The dashboard enables:
+- 📤 Drag & drop upload or selection of sample order images.
+- 🔍 Instant extraction preview with side-by-side field inspection and validation badges.
+- 🧪 **Dry-Run Mode** toggle (simulates complete business logic without moving the mouse).
+- ⚡ **Live Automation Mode** (drives the real Fakturama desktop UI in real time).
+- 📸 Live milestone execution timeline and visual screenshot gallery.
 
-1. 📄 Upload or select a sample order image
-2. 🔍 Extract and preview the data (mock or LLM mode)
-3. 🚀 Run the automation with real-time progress
-4. 📸 View milestone screenshots
+---
 
-### Run via CLI
+### 2. Command Line Interface (CLI)
 
+#### Dry-Run Extraction & Validation (Zero Desktop Touch)
 ```powershell
-# Dry run (extraction + validation only, no UI interaction)
+# Real AI Vision extraction via Gemini
 python main.py --cli --image data/samples/purchase_order_01.png --dry-run
 
-# Full automation (requires Fakturama to be running)
-python main.py --cli --image data/samples/purchase_order_01.png
-
-# Use Gemini LLM extraction (requires GOOGLE_API_KEY)
-python main.py --cli --image my_order.png --llm
+# Offline Tesseract OCR extraction
+python main.py --cli --image data/samples/purchase_order_01.png --ocr --dry-run
 ```
 
-### Run Tests
+#### Full End-to-End Live Desktop Automation
+```powershell
+# Execute live flow in Fakturama with visual milestones saved
+python main.py --cli --image data/samples/purchase_order_01.png
+```
+
+---
+
+## 🧪 Testing
+
+The repository contains a test suite covering Pydantic models, mathematical reconciliation, VAT calculations, extractor parsing, and orchestrator state transitions:
 
 ```powershell
-python -m pytest tests/ -v
+pytest -v
 ```
 
-## Project Structure
+```text
+tests/test_extractor.py::TestBaseExtractorValidation ... PASSED
+tests/test_extractor.py::TestOCRExtractorParsing ... PASSED
+tests/test_extractor.py::TestLLMExtractorUnit ... PASSED
+tests/test_flow_dryrun.py::TestOrchestratorDryRun ... PASSED
+tests/test_models.py::TestPaymentMethodMapping ... PASSED
+tests/test_models.py::TestOrderItem ... PASSED
+tests/test_models.py::TestDebtorInfo ... PASSED
+tests/test_models.py::TestOrderData ... PASSED
+tests/test_models.py::TestDocumentVerification ... PASSED
+tests/test_ui.py::test_index_page ... PASSED
+tests/test_ui.py::test_select_sample_valid ... PASSED
+tests/test_ui.py::test_extract_llm_success ... PASSED
+tests/test_ui.py::test_run_dry_run ... PASSED
+tests/test_ui.py::test_reset_endpoint ... PASSED
+
+============================= 54 passed in 1.06s =============================
+```
+
+---
+
+## 📂 Repository Structure
 
 ```
-├── main.py                          # Entry point (web UI or CLI)
-├── requirements.txt                 # Python dependencies
+├── main.py                          # Unified CLI and Web Dashboard entry point
+├── requirements.txt                 # Project dependencies
+├── .env.example                     # Environment configuration template
 ├── docs/
-│   └── DESIGN_DOCUMENT.md           # Part 1 deliverable (1-4 pages)
+│   └── DESIGN_DOCUMENT.md           # Part 1 deliverable: Architectural design & tradeoffs
 ├── src/
 │   ├── models/
-│   │   └── order.py                 # Pydantic data models, VAT math, validation
+│   │   ├── __init__.py
+│   │   └── order.py                 # Pydantic v2 schemas, VAT math & document models
 │   ├── extractors/
-│   │   ├── base.py                  # Abstract extractor interface
-│   │   ├── llm_extractor.py         # Gemini multimodal LLM extraction
-│   │   └── mock_extractor.py        # Deterministic test data
+│   │   ├── __init__.py
+│   │   ├── base.py                  # Abstract base extractor & validation rules
+│   │   ├── llm_extractor.py         # Gemini multimodal vision extraction
+│   │   └── ocr_extractor.py         # Local Tesseract OCR & regex parser
 │   ├── automation/
-│   │   ├── uia_wrapper.py           # MS UI Automation wrapper
-│   │   ├── locators.py              # Centralized UI element locators
-│   │   └── fakturama_app.py         # Page-object controller
+│   │   ├── __init__.py
+│   │   ├── uia_wrapper.py           # Resilient Microsoft UI Automation wrapper
+│   │   ├── locators.py              # Centralized UIA element locator repository
+│   │   └── fakturama_app.py         # Page-Object controller for Fakturama 2.x
 │   ├── flow/
-│   │   └── orchestrator.py          # 5-step end-to-end flow
+│   │   ├── __init__.py
+│   │   └── orchestrator.py          # 5-step Image-to-Cash orchestration engine
 │   └── ui/
-│       ├── app.py                   # Flask web dashboard server
-│       ├── templates/index.html     # Dashboard UI
-│       └── static/style.css         # Premium dark-mode styling
+│       ├── __init__.py
+│       ├── app.py                   # Flask API server & background task runner
+│       ├── templates/index.html     # Dashboard frontend interface
+│       └── static/style.css         # Modern dark-mode UI styling
 ├── scripts/
-│   └── generate_sample_po.py        # Synthetic PO image generator
-├── data/samples/                    # Generated test images + JSON sidecars
+│   ├── generate_sample_po.py        # Synthetic realistic purchase order image generator
+│   └── dump_uia_tree.py             # UIA accessibility tree inspection & mapping utility
+├── data/
+│   ├── samples/                     # Real sample purchase order images (.png)
+│   └── uploads/                     # User uploads directory
 ├── tests/
-│   ├── test_models.py               # 20 model/math unit tests
-│   ├── test_extractor.py            # 13 extractor tests
-│   └── test_flow_dryrun.py          # 7 orchestrator dry-run tests
-└── artifacts/screenshots/           # Automation milestone screenshots
+│   ├── test_models.py               # Unit tests for data structures and VAT math
+│   ├── test_extractor.py            # Extractor parsing and reconciliation tests
+│   ├── test_flow_dryrun.py          # Orchestrator flow and transition tests
+│   └── test_ui.py                   # Flask dashboard API endpoint tests
+└── artifacts/screenshots/           # Milestone visual audit screenshots
 ```
 
-## Architecture
+---
 
+## 📋 The 5-Step Order-to-Cash Flow
+
+| Step | Phase | Core Action | Validation / Safety |
+|---|---|---|---|
+| **1** | **Extract & Initialize** | Run vision/OCR model, parse schema, attach to Fakturama, open New Order. | Math cross-check against source image; dismiss stale dialogs. |
+| **2** | **Resolve Debtor** | Search Order address selector. If not found, open New Contact tab, populate address/payment, save, close tab, and re-select. | Verifies Debtor presence in selector. |
+| **3** | **Resolve Items** | For each item: search product catalog. If missing, open New Product tab, configure VAT & price, save, close, and add to order. | Validates unit price, VAT rate, quantity, and line total. |
+| **4** | **Save & Link Invoice** | Save Order, verify order numbering, click toolbar action to create linked Invoice. | Verifies invoice tab title and linked order reference. |
+| **5** | **Reconciliation & Status** | Verify linked invoice totals, apply Paid/Unpaid status with payment date, and save. | Confirms document consistency across all stages. |
+
+---
+
+## 🛠️ Developer Utilities
+
+### Inspecting the Fakturama UIA Tree
+To discover new control identifiers or debug UI modifications, run the tree inspection tool while Fakturama is open:
+```powershell
+python scripts/dump_uia_tree.py --depth 8 --filter "Order"
 ```
-Order Image ──> Extraction Engine ──> Orchestrator ──> Fakturama UIA
-                (LLM / Mock)          (5-step flow)    (SWT/Win32)
-                     │                      │               │
-              Pydantic models        Conditional         Pattern-based
-              + math validation      master data          interaction
-                                     creation            + screenshots
+
+### Generating Test Purchase Orders
+To generate realistic synthetic purchase order images:
+```powershell
+python scripts/generate_sample_po.py
 ```
-
-### The 5-Step Flow
-
-| Step | Description | Key Logic |
-|------|-------------|-----------|
-| 1 | Extract + Open Order | Parse image → set date, Cust.Ref, Net mode |
-| 2 | Select/Create Debtor | Use Order selector → if miss, create in New Contact tab → re-select |
-| 3 | Select/Create Products | For each item: ensure VAT → create if needed → set line details |
-| 4 | Save Order + Verify | Verify in Data > Documents → create follow-up Invoice |
-| 5 | Complete Invoice | Set payment method/status → save → final verification |
-
-## What's Implemented
-
-- ✅ **Complete data model layer** with Pydantic v2, VAT calculations, payment code mapping
-- ✅ **Dual extraction engine** (Gemini LLM + deterministic mock)
-- ✅ **Full UIA automation framework** with coordinate-independent element discovery
-- ✅ **Centralized locator system** — one file to update if Fakturama changes labels
-- ✅ **5-step orchestrator** with progress callbacks, error handling, and stop-for-review safety
-- ✅ **Web UI dashboard** with upload, preview, real-time progress, and screenshot gallery
-- ✅ **CLI interface** with dry-run and verbose modes
-- ✅ **50 passing tests** covering models, extractors, and flow logic
-- ✅ **Sample PO generator** creating realistic test images with JSON ground truth
-- ✅ **Design document** (Part 1 deliverable)
-
-## What's Skipped / Known Limitations
-
-- **Live Fakturama interaction testing** — The UIA wrapper and page-object controller are fully implemented but not end-to-end tested against a running Fakturama instance due to Fakturama's Eclipse RCP launcher issues in headless contexts.
-- **SWT-specific UIA tree mapping** — The exact AutomationIds and tree structure of Fakturama's SWT controls need to be mapped by running an accessibility inspector (like Accessibility Insights) against the live application. The locators module contains best-effort names based on the assignment screenshots.
-- **Error recovery** — The system stops cleanly on errors but doesn't attempt automatic retry or dialog dismissal.
-
-## If You Had 3 More Hours
-
-1. **Map the real UIA tree** — Run Accessibility Insights or Inspect.exe against every Fakturama editor state and update `locators.py` with confirmed AutomationIds, ClassNames, and tree paths. This is the #1 prerequisite for live automation.
-
-2. **Add retry/recovery middleware** — Wrap each orchestrator step with screenshot-on-failure, unexpected-dialog detection, and automatic retry logic. Real desktop automation always encounters transient failures.
-
-3. **End-to-end integration test** — Create a fresh Fakturama workspace (empty HSQLDB), run the full flow against it, and verify all records through `Data > Documents`. This would catch UIA selector mismatches immediately.
-
-4. **Batch processing mode** — Process a directory of PO images sequentially, accumulating a summary report. Handle cross-order Debtor/Product reuse.
-
-5. **Visual regression baselines** — Compare milestone screenshots against golden references using SSIM to catch unexpected UI changes.

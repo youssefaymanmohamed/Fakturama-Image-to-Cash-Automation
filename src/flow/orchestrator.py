@@ -66,7 +66,7 @@ class Orchestrator:
     Coordinates the full Image-to-Cash automation flow.
 
     Usage:
-        extractor = MockExtractor()
+        extractor = LLMExtractor()
         uia = UIAWrapper(screenshot_dir="artifacts/screenshots")
         orch = Orchestrator(extractor, uia)
         result = orch.run("data/samples/purchase_order_01.png")
@@ -140,9 +140,20 @@ class Orchestrator:
             # 1.3: Attach to Fakturama and open New Order
             self._report("1.3", "Attaching to Fakturama...")
             self.uia.attach_or_launch()
+            time.sleep(1.0)
+
+            # Clean slate: dismiss any leftover dialogs from previous failed runs
+            self._report("1.3", "Dismissing any leftover dialogs...")
+            try:
+                import uiautomation as auto
+                auto.SendKeys("{Escape}")
+                time.sleep(0.3)
+            except Exception:
+                pass
 
             self._report("1.3", "Opening New Order...")
             self.app.open_new_order()
+            time.sleep(1.0)
             result.steps_completed.append("1.3: New Order opened")
 
             # 1.5: Set Order Date
@@ -194,12 +205,20 @@ class Orchestrator:
                     self._report("3.7", f"Creating Product: {item.sku}")
                     self.app.create_product(item)
 
-                    # 3.12: Re-select in Order
+                    # 3.12: Re-select in Order — retry up to 3 times with increasing delays
                     self._report("3.12", f"Re-selecting Product: {item.sku}")
-                    product_found = self.app.search_and_select_product(item.sku)
+                    product_found = False
+                    for attempt in range(1, 4):
+                        wait = attempt * 1.5
+                        self._report("3.12", f"Selection attempt {attempt}/3 (waiting {wait:.0f}s for Fakturama to index)")
+                        time.sleep(wait)
+                        product_found = self.app.search_and_select_product(item.sku)
+                        if product_found:
+                            break
+
                     if not product_found:
                         raise StopForReview(
-                            f"Newly created Product '{item.sku}' not found in selector. "
+                            f"Newly created Product '{item.sku}' not found in selector after 3 attempts. "
                             "Manual review required."
                         )
 

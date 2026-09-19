@@ -78,27 +78,27 @@
             </div>
             <div class="card-body">
                 <div class="mode-selector">
-                    <label class="mode-option active" data-mode="mock">
-                        <input type="radio" name="mode" value="mock" checked>
-                        <div class="mode-card">
-                            <div class="mode-icon">🧪</div>
-                            <div class="mode-label">Mock / Test <span style="font-size:0.75rem; color:#10b981; font-weight:bold;">⚡ Instant</span></div>
-                            <div class="mode-desc">Built-in sample data, extracted in &lt; 0.1s</div>
-                        </div>
-                    </label>
-                    <label class="mode-option" data-mode="llm">
-                        <input type="radio" name="mode" value="llm">
+                    <label class="mode-option active" data-mode="llm">
+                        <input type="radio" name="mode" value="llm" checked>
                         <div class="mode-card">
                             <div class="mode-icon">🤖</div>
-                            <div class="mode-label">Gemini LLM</div>
-                            <div class="mode-desc">Live multimodal vision via Google API (~5–10s)</div>
+                            <div class="mode-label">AI Vision (Gemini) <span style="font-size:0.75rem; color:#60a5fa; font-weight:bold;">⚡ Recommended</span></div>
+                            <div class="mode-desc">Live multimodal vision extraction directly from image</div>
+                        </div>
+                    </label>
+                    <label class="mode-option" data-mode="ocr">
+                        <input type="radio" name="mode" value="ocr">
+                        <div class="mode-card">
+                            <div class="mode-icon">📄</div>
+                            <div class="mode-label">Local OCR (Tesseract)</div>
+                            <div class="mode-desc">Offline local OCR engine + regex parsing</div>
                         </div>
                     </label>
                 </div>
 
-                <div class="api-key-container" id="apiKeyContainer" style="display:none; margin: 14px 0;">
+                <div class="api-key-container" id="apiKeyContainer" style="margin: 14px 0;">
                     <label style="font-size: 0.82rem; color: #94a3b8; display: block; margin-bottom: 6px;">
-                        Gemini API Key <span style="opacity: 0.6;">(or leave blank if set in <code>.env</code> / environment)</span>:
+                        Gemini API Key <span style="opacity: 0.6;">(optional if set in <code>.env</code> / environment)</span>:
                     </label>
                     <input type="password" id="apiKeyInput" placeholder="AIzaSy..." style="width: 100%; box-sizing: border-box; padding: 10px 14px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.12); border-radius: 8px; color: #f8fafc; font-family: inherit; font-size: 0.88rem;">
                 </div>

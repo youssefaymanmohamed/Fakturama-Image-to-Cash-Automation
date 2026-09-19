@@ -1,127 +1,178 @@
 """
-Tests for the extractor modules: mock extractor and validation logic.
+Tests for extractor modules: BaseExtractor validation, OCRExtractor parsing,
+and LLMExtractor response handling (using unit test mocks).
 """
 
-import json
-import pytest
 from decimal import Decimal
 from pathlib import Path
-from tempfile import NamedTemporaryFile, TemporaryDirectory
+from unittest.mock import MagicMock, patch
+import pytest
 
-from src.extractors.mock_extractor import MockExtractor, SAMPLE_ORDER_SINGLE_LINE, SAMPLE_ORDER_MULTI_LINE
-from src.extractors.base import BaseExtractor
-
-
-class TestMockExtractor:
-    """Test the MockExtractor's sample resolution and JSON loading."""
-
-    def test_default_returns_single_line(self):
-        ext = MockExtractor()
-        data = ext.extract(Path("test_image.png"))
-        assert len(data.items) == 1
-        assert data.external_reference == "PO-2025-0042"
-
-    def test_multi_keyword_returns_multi(self):
-        ext = MockExtractor()
-        data = ext.extract(Path("test_multi_order.png"))
-        assert len(data.items) == 3
-        assert data.external_reference == "PO-2025-0187"
-
-    def test_forced_key_single(self):
-        ext = MockExtractor(sample_key="single")
-        data = ext.extract(Path("anything.png"))
-        assert data.external_reference == "PO-2025-0042"
-
-    def test_forced_key_multi(self):
-        ext = MockExtractor(sample_key="multi")
-        data = ext.extract(Path("anything.png"))
-        assert len(data.items) == 3
-
-    def test_json_sidecar_loading(self):
-        """When a .json sidecar exists, data should be loaded from it."""
-        with TemporaryDirectory() as tmpdir:
-            json_data = {
-                "order_date": "2025-12-25",
-                "external_reference": "CUSTOM-REF",
-                "items": [
-                    {
-                        "sku": "CUSTOM-SKU",
-                        "description": "Custom Item",
-                        "quantity": "3",
-                        "unit_net_price": "10.00",
-                        "vat_percent": "19",
-                        "discount_percent": "0",
-                    }
-                ],
-                "paid_status": "UNPAID",
-            }
-            json_path = Path(tmpdir) / "custom_order.json"
-            img_path = Path(tmpdir) / "custom_order.png"
-
-            # Create dummy image
-            img_path.write_text("fake image")
-            json_path.write_text(json.dumps(json_data))
-
-            ext = MockExtractor()
-            data = ext.extract(img_path)
-            assert data.external_reference == "CUSTOM-REF"
-            assert data.items[0].sku == "CUSTOM-SKU"
-
-    def test_deep_copy_isolation(self):
-        """Each extraction should return independent copies."""
-        ext = MockExtractor(sample_key="single")
-        d1 = ext.extract(Path("a.png"))
-        d2 = ext.extract(Path("b.png"))
-        d1.external_reference = "MODIFIED"
-        assert d2.external_reference == "PO-2025-0042"
+from src.extractors.base import BaseExtractor, ExtractionError
+from src.extractors.llm_extractor import LLMExtractor
+from src.extractors.ocr_extractor import (
+    OCRExtractor,
+    _parse_decimal,
+    _normalize_payment_method,
+    _normalize_date,
+)
+from src.models.order import (
+    DebtorAddress,
+    DebtorInfo,
+    OrderData,
+    OrderItem,
+    PaidStatus,
+)
 
 
-class TestExtractorValidation:
-    """Test the base extractor's validation logic."""
+@pytest.fixture
+def valid_order_data() -> OrderData:
+    """Fixture providing a valid OrderData instance."""
+    debtor = DebtorInfo(
+        company="Acme Corp",
+        first_name="John",
+        last_name="Doe",
+        alias="acme-corp",
+        billing_address=DebtorAddress(
+            street="Main St 1",
+            zip="12345",
+            city="Berlin",
+            country="Germany",
+            email="john@acme.com",
+            telephone="+4912345678",
+        ),
+        payment_method="Bank Transfer",
+    )
+    items = [
+        OrderItem(
+            sku="ITEM-001",
+            description="Test Widget",
+            quantity=Decimal("2"),
+            unit_net_price=Decimal("50.00"),
+            vat_percent=Decimal("19"),
+            discount_percent=Decimal("0"),
+            source_total=Decimal("100.00"),
+        )
+    ]
+    return OrderData(
+        order_date="2025-03-15",
+        external_reference="PO-2025-9999",
+        debtor=debtor,
+        items=items,
+        source_total_net=Decimal("100.00"),
+        source_total_vat=Decimal("19.00"),
+        source_total_gross=Decimal("119.00"),
+        paid_status=PaidStatus.PAID,
+        payment_date="2025-03-20",
+    )
 
-    def test_valid_extraction_no_warnings(self):
-        ext = MockExtractor(sample_key="single")
-        data = ext.extract(Path("test.png"))
-        warnings = ext.validate_extraction(data)
+
+class TestBaseExtractorValidation:
+    """Test BaseExtractor's validation and reconciliation logic."""
+
+    class ConcreteExtractor(BaseExtractor):
+        def extract(self, image_path: Path) -> OrderData:
+            raise NotImplementedError
+
+    def test_valid_extraction_no_warnings(self, valid_order_data):
+        ext = self.ConcreteExtractor()
+        warnings = ext.validate_extraction(valid_order_data)
         assert len(warnings) == 0
 
-    def test_missing_items_warning(self):
-        ext = MockExtractor(sample_key="single")
-        data = ext.extract(Path("test.png"))
-        data.items = []
-        warnings = ext.validate_extraction(data)
+    def test_missing_items_warning(self, valid_order_data):
+        ext = self.ConcreteExtractor()
+        valid_order_data.items = []
+        warnings = ext.validate_extraction(valid_order_data)
         assert any("No line items" in w for w in warnings)
 
-    def test_missing_debtor_warning(self):
-        ext = MockExtractor(sample_key="single")
-        data = ext.extract(Path("test.png"))
-        data.debtor.company = ""
-        data.debtor.last_name = ""
-        warnings = ext.validate_extraction(data)
+    def test_missing_debtor_warning(self, valid_order_data):
+        ext = self.ConcreteExtractor()
+        valid_order_data.debtor.company = ""
+        valid_order_data.debtor.last_name = ""
+        warnings = ext.validate_extraction(valid_order_data)
         assert any("debtor" in w.lower() for w in warnings)
 
+    def test_math_mismatch_warning(self, valid_order_data):
+        ext = self.ConcreteExtractor()
+        # Alter the source gross to produce a mathematical mismatch
+        valid_order_data.source_total_gross = Decimal("999.99")
+        warnings = ext.validate_extraction(valid_order_data)
+        assert any("Order total gross" in w for w in warnings)
 
-class TestBuiltinSampleIntegrity:
-    """Verify that built-in samples have consistent calculated totals."""
 
-    def test_single_line_totals(self):
-        data = SAMPLE_ORDER_SINGLE_LINE
-        assert data.total_net == data.source_total_net
-        assert data.total_vat == data.source_total_vat
-        assert data.total_gross == data.source_total_gross
+class TestOCRExtractorParsing:
+    """Test OCRExtractor utility and regex parsing functions."""
 
-    def test_multi_line_totals(self):
-        data = SAMPLE_ORDER_MULTI_LINE
-        # Allow small tolerance for multi-line rounding
-        assert abs(data.total_net - data.source_total_net) <= Decimal("0.05")
-        assert abs(data.total_gross - data.source_total_gross) <= Decimal("0.05")
+    def test_parse_decimal_formats(self):
+        assert _parse_decimal("123.45") == Decimal("123.45")
+        assert _parse_decimal("123,45") == Decimal("123.45")
+        assert _parse_decimal("1.234,56") == Decimal("1234.56")
+        assert _parse_decimal("1,234.56") == Decimal("1234.56")
+        assert _parse_decimal("€ 49.99") == Decimal("49.99")
+        assert _parse_decimal("") is None
 
-    def test_single_line_items_valid(self):
-        data = SAMPLE_ORDER_SINGLE_LINE
-        for i, item in enumerate(data.items):
-            assert item.validate_source_total(), f"Item {i} total mismatch"
+    def test_normalize_payment_method(self):
+        assert _normalize_payment_method("Bank Transfer (Wire)") == "Bank Transfer"
+        assert _normalize_payment_method("Credit Card Payment") == "Credit Card"
+        assert _normalize_payment_method("SEPA Direct Debit") == "SEPA Direct Debit"
+        assert _normalize_payment_method("Unknown") == "Bank Transfer"
 
-    def test_multi_line_items_valid(self):
-        data = SAMPLE_ORDER_MULTI_LINE
-        for i, item in enumerate(data.items):
-            assert item.validate_source_total(), f"Item {i} total mismatch"
+    def test_normalize_date(self):
+        assert _normalize_date("2025-03-15") == "2025-03-15"
+        assert _normalize_date("15.03.2025") == "2025-03-15"
+        assert _normalize_date("March 15, 2025") == "2025-03-15"
+        assert _normalize_date("invalid") is None
+
+    def test_ocr_text_parser(self):
+        ext = OCRExtractor()
+        raw_sample = """
+PURCHASE ORDER
+PO Number: PO-2025-0042
+Order Date: 2025-03-15
+
+Bill To:
+Acme Corporation
+John Smith
+123 Innovation Drive
+10115 Berlin
+Germany
+contact@acme.com
++49 30 1234567
+
+Item: WIDGET-001 Premium Widget
+Quantity: 10
+Unit Price: 24.50
+Line Total: 245.00
+VAT: 19%
+
+Total Net: 245.00
+VAT: 46.55
+Total Gross: 291.55
+Payment: Bank Transfer
+Status: PAID
+Payment Date: 2025-03-20
+"""
+        order = ext._parse(raw_sample)
+        assert order.external_reference == "PO-2025-0042"
+        assert str(order.order_date) == "2025-03-15"
+        assert order.debtor.company == "Acme Corporation"
+        assert order.paid_status == PaidStatus.PAID
+
+
+class TestLLMExtractorUnit:
+    """Test LLMExtractor initialization and error handling."""
+
+    def test_missing_api_key_raises_extraction_error(self, tmp_path):
+        dummy_img = tmp_path / "po.png"
+        dummy_img.write_bytes(b"dummy image bytes")
+
+        with patch.dict("os.environ", {}, clear=True):
+            ext = LLMExtractor(api_key="")
+            ext._api_key = ""
+            with pytest.raises(ExtractionError, match="GOOGLE_API_KEY"):
+                ext.extract(dummy_img)
+
+    def test_missing_image_file_raises_error(self):
+        ext = LLMExtractor(api_key="test-key")
+        with pytest.raises(ExtractionError, match="not found"):
+            ext.extract(Path("non_existent_file.png"))

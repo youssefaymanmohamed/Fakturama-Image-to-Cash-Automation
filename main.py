@@ -51,8 +51,8 @@ def main():
 
     # CLI options
     parser.add_argument("--image", type=str, help="Path to the order image (CLI mode)")
-    parser.add_argument("--llm", action="store_true", help="Use Gemini LLM extraction")
-    parser.add_argument("--mock", action="store_true", help="Use mock/test extraction (default)")
+    parser.add_argument("--llm", action="store_true", help="Use Gemini Multimodal Vision extraction (default)")
+    parser.add_argument("--ocr", action="store_true", help="Use Tesseract OCR extraction (offline)")
     parser.add_argument("--dry-run", action="store_true", help="Skip UI automation, extract + validate only")
     parser.add_argument("--screenshot-dir", default="artifacts/screenshots", help="Screenshot output directory")
     parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
@@ -100,14 +100,14 @@ def run_cli(args):
         sys.exit(1)
 
     # Select extractor
-    if args.llm:
+    if args.ocr:
+        from src.extractors.ocr_extractor import OCRExtractor
+        extractor = OCRExtractor()
+        print("Using: Tesseract OCR extraction (offline)")
+    else:
         from src.extractors.llm_extractor import LLMExtractor
         extractor = LLMExtractor()
-        print("Using: Gemini LLM extraction")
-    else:
-        from src.extractors.mock_extractor import MockExtractor
-        extractor = MockExtractor()
-        print("Using: Mock/test extraction")
+        print("Using: Gemini Multimodal Vision extraction")
 
     # Create UIA wrapper (only if live automation)
     if args.dry_run:
