@@ -151,7 +151,6 @@ def extract_data():
                     extractor = LLMExtractor(api_key=api_key or _state.get("api_key"))
                     order_data = extractor.extract(Path(image_path))
                     warnings = extractor.validate_extraction(order_data)
-                    warnings.insert(0, "Note: Local Tesseract OCR was not found on this system; successfully extracted via Gemini AI Vision.")
                 else:
                     raise
         else:
