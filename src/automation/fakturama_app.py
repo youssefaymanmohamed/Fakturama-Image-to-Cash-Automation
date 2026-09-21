@@ -1316,12 +1316,22 @@ class FakturamaApp:
                 tabs = self.uia.find_all_by_type(
                     "TabItemControl", parent=self.uia.get_root()
                 )
+                # 1. If there are no dirty editor tabs remaining in Fakturama, save succeeded
+                dirty_tabs = [
+                    t for t in tabs
+                    if t.BoundingRectangle and t.BoundingRectangle.top < 300
+                    and (t.Name or "").strip().startswith("*")
+                ]
+                if not dirty_tabs:
+                    saved = True
+                    break
+
+                # 2. Check active/selected tab
                 editor_tabs_now = [
                     t for t in tabs
                     if t.BoundingRectangle and t.BoundingRectangle.top < 300
                     and (t.Name or "").strip().lower() != "fakturama"
                 ]
-                # Check active/selected tab
                 active_tab = next((t for t in editor_tabs_now if self._is_selected_tab(t)), None)
                 if active_tab is not None:
                     act_name = (active_tab.Name or "").strip()
@@ -1329,7 +1339,7 @@ class FakturamaApp:
                         saved = True
                         break
 
-                # Check newest editor tab (rightmost in tab bar)
+                # 3. Check newest editor tab (rightmost in tab bar)
                 if editor_tabs_now:
                     newest_name = (editor_tabs_now[-1].Name or "").strip()
                     if not newest_name.startswith("*"):
