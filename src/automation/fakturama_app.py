@@ -139,7 +139,7 @@ class FakturamaApp:
         """Step 1.5: Select order date and verify read-back value."""
         root = self.uia.get_root()
         if isinstance(order_date, (datetime, date)):
-            expected = order_date if isinstance(order_date, date) else order_date.date()
+            expected = order_date.date() if isinstance(order_date, datetime) else order_date
             date_str = expected.strftime("%d.%m.%Y")
         else:
             date_str = str(order_date)
@@ -150,7 +150,7 @@ class FakturamaApp:
                 except ValueError:
                     expected = None
             if expected is None:
-                expected = date.today()
+                raise ValueError(f"Unsupported order date: {date_str!r}")
 
         date_candidates = [ORDER.ORDER_DATE, "Date", "Order Date", "Datum"]
         for label in date_candidates:
@@ -196,7 +196,7 @@ class FakturamaApp:
             except Exception as e:
                 logger.debug(f"Date set failed with label '{label}': {e}")
 
-        self._milestone("1.5", f"Order date set: {date_str}")
+        raise UIAError(f"Order date commit could not be verified: {date_str}")
 
     def set_cust_ref(self, reference: str) -> None:
         """Step 1.6: Enter and verify external reference in Cust.Ref."""
@@ -212,33 +212,24 @@ class FakturamaApp:
 
         raise UIAError(f"Verification failed: could not set Cust.Ref to '{reference}'.")
 
-    def set_price_mode_net(self) -> None:
-        """Step 1.7: Set document price mode to Net, keep VAT as With VAT."""
-        root = self.uia.get_root()
-        combos = self.uia.find_all_by_type("ComboBoxControl", parent=root)
-        for c in combos:
-            val = (c.Name or "").strip()
-            current_val = self.uia.get_value(c)
-            if "gross" in current_val.lower() or "net" in current_val.lower() or "gross" in val.lower():
-                try:
-                    self.uia.select_combo_verified(c, "Net", combo_name="PriceMode")
-                    self._milestone("1.7", "Price mode set and verified: Net")
-                    return
-                except Exception:
-                    pass
-
-        # Fallback: ComboBox located near top header
-        for c in combos:
-            rect = c.BoundingRectangle
-            if rect and rect.top < 350 and rect.left > 700:
-                try:
-                    self.uia.select_combo_verified(c, "Net", combo_name="PriceModeHeader")
-                    self._milestone("1.7", "Price mode set and verified: Net")
-                    return
-                except Exception:
-                    pass
-
-        logger.info("Price mode already Net or ComboBox not found; proceeding.")
+    def set_price_mode_net(self, force: bool = False) -> None:
+        """Set the active document to Net and fire SWT's real selection event."""
+        editor = self.uia.active_editor()
+        combos = self.uia.find_all_by_type(
+            "ComboBoxControl", parent=editor["body"], max_depth=18,
+        )
+        for combo in combos:
+            current = self.uia.get_value(combo).strip()
+            if current.lower() not in ("gross", "net"):
+                continue
+            if force and current.lower() == "net":
+                self.uia.select_combo_verified(combo, "Gross", combo_name="PriceModeReset")
+            self.uia.select_combo_verified(combo, "Net", combo_name="PriceMode")
+            if self.uia.get_value(combo).strip().lower() != "net":
+                raise UIAError("Price mode did not read back as Net")
+            self._milestone("1.7", "Price mode set and verified: Net")
+            return
+        raise UIAError("Could not find the price mode ComboBox in the active editor")
 
     # ===================================================================
     # Step 2: Select or create the Debtor
@@ -1419,6 +1410,12 @@ class FakturamaApp:
             )
         logger.info("Save operation verified successfully.")
 
+    # This later definition intentionally replaces the legacy implementation
+    # above, keeping one verified save lifecycle in UIAWrapper.
+    def save_current(self) -> None:
+        self._saved_editor = self.uia.save_active_editor(list(TOOLBAR.SAVE_NAMES))
+        self._milestone("4.4", f"Saved {self._saved_editor.get('kind') or 'record'}: {self._saved_editor.get('number') or self._saved_editor.get('title')}")
+
     @staticmethod
     def _is_selected_tab(tab) -> bool:
         """Read a tab's selection state without letting stale UIA handles abort a save."""
@@ -1432,19 +1429,20 @@ class FakturamaApp:
         """Step 4.5: Open Data > Documents and verify the saved Order row."""
         result = DocumentVerification(doc_type="Order")
         try:
-            self._navigate_to(NAV.DATA, NAV.DOCUMENTS)
-            time.sleep(1.0)
+            saved = getattr(self, "_saved_editor", {})
+            number = saved.get("number", "")
+            if saved.get("kind") != "Order" or not number:
+                raise UIAError("The saved Order identity is unavailable for Documents read-back")
+            row = self._read_documents_row(number)
             screenshot = self._milestone("4.5", "Verifying Order in Documents")
             result.screenshot_path = str(screenshot)
-
-            # Search for order by Cust.Ref
-            found = self._search_in_list(order_data.external_reference)
-            result.cust_ref_ok = found
-            result.total_ok = True
-            result.state_ok = True
-            result.date_ok = True
+            result.doc_number = row["number"]
+            result.cust_ref_ok = row["cust_ref"] == order_data.external_reference
+            result.total_ok = self.uia._values_match(str(order_data.total_gross), row["total"])
+            result.state_ok = "PENDING" in row["state"].upper()
+            result.date_ok = self._document_date(row["date"]) == order_data.order_date
         except Exception as e:
-            logger.warning(f"Order verification notice: {e}")
+            raise UIAError(f"Order Documents verification failed: {e}") from e
 
         # Return to Order tab
         self.uia.switch_to_editor_tab("Order")
@@ -1590,6 +1588,64 @@ class FakturamaApp:
 
             self._milestone("5.3", f"Invoice marked PAID on {payment_date or 'today'}")
 
+    def set_invoice_payment(
+        self, payment_method: str, is_paid: bool,
+        payment_date: Optional[str] = None, total: Optional[str] = None,
+    ) -> None:
+        """Set invoice payment controls and verify every value."""
+        editor = self.uia.active_editor()
+        if editor.get("kind") != "Invoice":
+            raise UIAError("Payment can only be set in the selected Invoice editor")
+        body = editor["body"]
+        method_ok = not bool(payment_method)
+        if payment_method:
+            combos = self.uia.find_all_by_type("ComboBoxControl", parent=body, max_depth=18)
+            pay_combo = next((c for c in combos if not any(token in self.uia.get_value(c).lower()
+                for token in ("net", "gross", "with vat", "shipping", "free of shipping"))), None)
+            if pay_combo is None:
+                raise UIAError("Invoice payment method ComboBox was not found")
+            aliases = {"bank transfer": ("bank", "überweisung", "ueberweisung"),
+                       "credit card": ("credit card", "card"),
+                       "sepa direct debit": ("sepa", "direct debit")}.get(
+                           payment_method.strip().lower(), (payment_method,))
+            for alias in aliases:
+                try:
+                    self.uia.select_combo_verified(pay_combo, alias, combo_name="InvoicePaymentMethod")
+                    method_ok = alias.lower() in self.uia.get_value(pay_combo).lower()
+                    if method_ok:
+                        break
+                except Exception:
+                    continue
+            if not method_ok:
+                raise UIAError(f"Could not select payment method {payment_method!r}")
+        paid_ok = not is_paid; date_ok = not (is_paid and payment_date); value_ok = not (is_paid and total)
+        if is_paid:
+            paid_cb = self.uia.find_by_name(INVOICE.PAID_CHECKBOX, control_type="CheckBoxControl", parent=body, timeout=2.0)
+            toggle = paid_cb.GetTogglePattern()
+            if not toggle:
+                raise UIAError("Paid checkbox does not expose TogglePattern")
+            if toggle.ToggleState != 1:
+                try: toggle.Toggle()
+                except Exception: self.uia.click(paid_cb)
+                time.sleep(.3)
+            paid_ok = paid_cb.GetTogglePattern().ToggleState == 1
+            if payment_date:
+                rect = paid_cb.BoundingRectangle
+                dates = [e for e in self.uia.find_all_by_type("EditControl", parent=body, max_depth=18)
+                         if not (e.Name or "").strip() and self.uia.is_interactable(e)
+                         and abs(e.BoundingRectangle.top - rect.top) < 80
+                         and re.search(r"\b\d{4}\b", self.uia.get_value(e))]
+                if not dates: raise UIAError("Paid date EditControl was not found")
+                date_edit = min(dates, key=lambda e: abs(e.BoundingRectangle.top - rect.top))
+                self.uia.set_swt_date_verified(date_edit, payment_date); date_ok = True
+            if total:
+                value = self.uia.find_by_name(INVOICE.PAYMENT_VALUE, control_type="EditControl", parent=body, timeout=2.0)
+                self.uia.set_text_verified(value, total, field_name=INVOICE.PAYMENT_VALUE)
+                value_ok = self.uia._values_match(total, self.uia.get_value(value))
+            self._invoice_payment_verified = {"method": method_ok, "paid": paid_ok,
+                                              "date": date_ok, "value": value_ok}
+            self._milestone("5.3", f"Invoice marked PAID on {payment_date or 'today'}")
+
     def verify_invoice_in_documents(self, order_data: OrderData) -> DocumentVerification:
         """Step 5.5: Verify both Invoice and Order in Data > Documents."""
         result = DocumentVerification(doc_type="Invoice")
@@ -1607,23 +1663,143 @@ class FakturamaApp:
                     f"Invoice total verification failed: expected gross total "
                     f"{expected_gross}."
                 )
-            self._navigate_to(NAV.DATA, NAV.DOCUMENTS)
-            time.sleep(1.0)
+            saved = getattr(self, "_saved_editor", {})
+            number = saved.get("number", "")
+            if saved.get("kind") != "Invoice" or not number:
+                raise UIAError("The saved Invoice identity is unavailable for Documents read-back")
+            row = self._read_documents_row(number)
             screenshot = self._milestone("5.5", "Final verification in Documents")
             result.screenshot_path = str(screenshot)
-            result.cust_ref_ok = True
-            result.state_ok = True
-            result.date_ok = True
+            result.doc_number = row["number"]
+            result.cust_ref_ok = row["cust_ref"] == order_data.external_reference
+            result.total_ok = self.uia._values_match(str(order_data.total_gross), row["total"])
+            result.state_ok = "CHECKED" in row["state"].upper()
+            result.date_ok = self._document_date(row["date"]) is not None
+            payment = getattr(self, "_invoice_payment_verified", {})
+            result.payment_method_ok = bool(payment.get("method"))
             if order_data.paid_status.value == "PAID":
-                result.paid_status_ok = True
+                result.paid_status_ok = all(payment.get(key) for key in ("paid", "date", "value"))
         except Exception as e:
-            logger.warning(f"Invoice verification notice: {e}")
+            raise UIAError(f"Invoice Documents verification failed: {e}") from e
 
         return result
 
     # ===================================================================
     # Internal Verified Helpers
     # ===================================================================
+
+    @staticmethod
+    def _document_date(value: str):
+        parts = value.split()
+        try:
+            return datetime.strptime(f"{parts[1]} {parts[2]} {parts[-1]}", "%b %d %Y").date()
+        except (ValueError, IndexError):
+            return None
+
+    @staticmethod
+    def _clipboard_text() -> str:
+        """Read Unicode clipboard text without optional pywin32 dependencies."""
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        user32.GetClipboardData.restype = wintypes.HANDLE
+        kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalLock.restype = ctypes.c_void_p
+        kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+        kernel32.GlobalUnlock.restype = wintypes.BOOL
+        for _ in range(10):
+            if user32.OpenClipboard(None):
+                try:
+                    handle = user32.GetClipboardData(13)  # CF_UNICODETEXT
+                    if not handle:
+                        return ""
+                    pointer = kernel32.GlobalLock(handle)
+                    try:
+                        return ctypes.wstring_at(pointer) if pointer else ""
+                    finally:
+                        if pointer:
+                            kernel32.GlobalUnlock(handle)
+                finally:
+                    user32.CloseClipboard()
+            time.sleep(.03)
+        return ""
+
+    @staticmethod
+    def _clear_clipboard() -> None:
+        user32 = ctypes.windll.user32
+        if user32.OpenClipboard(None):
+            try:
+                user32.EmptyClipboard()
+            finally:
+                user32.CloseClipboard()
+
+    def _read_documents_row(self, search_text: str) -> dict[str, str]:
+        """Wait for and copy one exact row from Fakturama's SWT Documents grid."""
+        self._navigate_to(NAV.DATA, NAV.DOCUMENTS)
+        time.sleep(.5)
+        root = self.uia.get_root()
+        tab = next(t for t in self.uia.find_all_by_type(
+            "TabItemControl", parent=root, max_depth=14,
+        ) if (t.Name or "").strip() == NAV.DOCUMENTS)
+        self.uia.click(tab)
+        view = tab.GetParentControl()
+        filter_deadline = time.monotonic() + 4
+        while time.monotonic() < filter_deadline:
+            edits = [e for e in self.uia.find_all_by_type(
+                "EditControl", parent=view, max_depth=15,
+            ) if self.uia.is_interactable(e)]
+            if edits:
+                search = max(edits, key=lambda e: e.BoundingRectangle.top)
+                try:
+                    self.uia.click(search)
+                    auto.SendKeys("{Ctrl}a")
+                    auto.SendKeys(search_text)
+                    time.sleep(.25)
+                    fresh = [e for e in self.uia.find_all_by_type(
+                        "EditControl", parent=view, max_depth=15,
+                    ) if self.uia.is_interactable(e)]
+                    if any(self.uia.get_value(e).strip() == search_text for e in fresh):
+                        break
+                except Exception:
+                    # SWT recreates controls while changing tabs; reacquire it.
+                    view = tab.GetParentControl()
+            time.sleep(.2)
+        else:
+            raise UIAError(f"Documents filter did not read back as {search_text!r}")
+
+        matches, copied = [], ""
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline:
+            grids = []
+            for pane in self.uia.find_all_by_type("PaneControl", parent=view, max_depth=18):
+                try:
+                    rect = pane.BoundingRectangle
+                    # The SWT table is exposed as a large leaf PaneControl.
+                    # Its width changes with the Fakturama window/sidebar size,
+                    # so do not require the old fixed 500 px layout.
+                    if (self.uia.is_interactable(pane) and rect.width() > 250
+                            and rect.height() > 100 and not pane.GetChildren()):
+                        grids.append(pane)
+                except Exception:
+                    continue
+            if grids:
+                grid = max(grids, key=lambda p: p.BoundingRectangle.width() * p.BoundingRectangle.height())
+                grid.SetFocus()
+                self._clear_clipboard()
+                auto.SendKeys("{Ctrl}a")
+                auto.SendKeys("{Ctrl}c")
+                time.sleep(.25)
+                copied = self._clipboard_text()
+                matches = [line.split("\t") for line in copied.splitlines()
+                           if search_text in line]
+                if len(matches) == 1 and len(matches[0]) >= 8:
+                    break
+            time.sleep(.25)
+        if len(matches) != 1 or len(matches[0]) < 8:
+            raise UIAError(f"Expected one Documents row for {search_text!r} within 6s; copied={copied!r}")
+        cells = matches[0]
+        return {"type": cells[0], "number": cells[1], "date": cells[2],
+                "debtor": cells[4], "cust_ref": cells[5], "state": cells[6],
+                "total": cells[7]}
 
     def _set_field_verified(self, field_name: str, value: str) -> None:
         """Set field value with mandatory read-back verification."""

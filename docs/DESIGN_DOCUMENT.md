@@ -1,144 +1,94 @@
 # Fakturama Image-to-Cash Automation — Design Document
 
 **Author:** Youssef Ayman  
-**Date:** September 2025  
-**Scope:** 1–4 page design document describing the system architecture, grounding strategy, extraction approach, and key tradeoffs.
+**Scope:** Design for converting one order image into a verified Fakturama Order and linked Invoice without fixed coordinates.
 
----
+## 1. Proposed system
 
-## 1. System Overview
+The system has four layers:
 
-The system transforms a single purchase order image into fully saved and verified Order + Invoice records inside Fakturama 2.x. It operates as a **Robotic Desktop Automation (RDA)** pipeline with three core subsystems:
+1. **Extraction:** Gemini Vision is the primary extractor, with Tesseract OCR as an offline option. Both return the same validated `OrderData` model.
+2. **Validation:** Pydantic normalizes dates, decimals, Debtor fields, addresses, payment data, and item rows. Decimal arithmetic recomputes line net, VAT, and gross totals before desktop automation starts.
+3. **Desktop automation:** Microsoft UI Automation discovers Fakturama's SWT controls through accessible names, control types, patterns, and parent-child relationships.
+4. **Orchestration and evidence:** One Order-first state machine resolves master data, saves the Order, creates its follow-up Invoice, verifies both Documents rows, and captures a screenshot after every completed milestone.
 
-1. **Extraction Engine** — Converts the image into structured data using multimodal LLM vision (Gemini) or OCR.
-2. **UI Automation Engine** — Discovers and interacts with Fakturama's SWT/Eclipse RCP interface using Microsoft UI Automation (UIA), completely independent of screen coordinates.
-3. **Orchestrator** — Sequences the end-to-end Order-first flow, including conditional master data creation, mathematical verification, and error recovery.
-
-```
-┌─────────────┐     ┌──────────────┐     ┌──────────────────┐     ┌──────────────┐
-│ Order Image │────>│  Extraction  │────>│   Orchestrator   │────>│  Fakturama   │
-│  (PNG/JPG)  │     │  (LLM/OCR)   │     │ (5-step flow)    │     │  (SWT/UIA)   │
-└─────────────┘     └──────────────┘     └──────────────────┘     └──────────────┘
-                           │                      │                       │
-                    Pydantic schema         Conditional logic        Save & Verify
-                    + math checks           + state machine         + Screenshots
+```text
+Image ─► extraction ─► validated OrderData ─► Order-first orchestrator
+                                                     │
+                                                     ▼
+                                      Fakturama through UI Automation
+                                                     │
+                                                     ▼
+                                      read-back checks + screenshots
 ```
 
----
+## 2. Image extraction and validation
 
-## 2. Control-Discovery / Grounding Strategy
+The Gemini prompt requests strict JSON containing the Order date and reference; Debtor company, contact, aliases, billing and delivery addresses; payment method, paid state, and payment date; and every SKU, description, quantity, unit net price, VAT percentage, discount, and source total. Low model temperature reduces output variation. Tesseract offers a local OCR and parsing path when external model access is unavailable.
 
-### 2.1 Why UIA over Coordinate-Based Approaches
+Extraction is treated as untrusted input. The system parses dates into date objects and money into `Decimal`, then checks:
 
-Fakturama is an Eclipse RCP application using SWT (Standard Widget Toolkit). SWT widgets render native Win32 controls, which means they expose accessibility nodes through the Windows UI Automation (UIA) tree. This is the critical insight that makes coordinate-independent automation possible.
-
-**Rejected alternatives:**
-- **Fixed pixel coordinates** — Brittle; breaks with resolution/DPI changes, window resizing, or any UI update.
-- **Template matching / OpenCV** — Requires maintaining a library of reference screenshots for each control; fragile across themes, fonts, and localizations.
-- **Direct database manipulation** — Faster but bypasses business logic (validation, auto-numbering, cascading updates), which defeats the purpose of testing the full UI flow.
-
-### 2.2 Element Discovery Hierarchy
-
-Elements are located using this priority cascade (most reliable first):
-
-1. **AutomationId** — Stable across localizations; ideal when Fakturama assigns them.
-2. **Name** property — The accessible label (e.g., "Save", "Cust.Ref.", "Select the address"). Works well for Fakturama's consistently-labeled fields.
-3. **ControlType + hierarchical position** — For controls without unique names, we navigate the tree (e.g., "the second EditControl inside the TabItem named 'Addresses'").
-4. **ClassName** — SWT class names like "SWT_Window0" provide process-level anchoring.
-
-All locator strings are centralized in a single `locators.py` module, so any label change in a Fakturama update requires editing exactly one file.
-
-### 2.3 Interaction Patterns
-
-| Pattern | Primary Method | Fallback |
-|---|---|---|
-| Click buttons | `InvokePattern.Invoke()` | `element.Click()` at center |
-| Set text fields | `ValuePattern.SetValue()` | Focus + `SendKeys` |
-| Select combos | `ExpandCollapsePattern` + `SelectionItemPattern` | Expand + name search + click |
-| Select table rows | Walk children, substring match | Scroll + re-search |
-
-### 2.4 Stabilization and Timing
-
-SWT applications can lag behind UIA tree updates. Our wrapper addresses this with:
-
-- **Smart waits:** All `find_*` methods poll with exponential backoff up to a configurable timeout (default 15s).
-- **Table stabilization:** `wait_for_stable_list()` polls the row count until it remains constant for 3 consecutive checks.
-- **Post-action delay:** A configurable 300ms pause after every UI action gives SWT time to process events.
-
----
-
-## 3. Image-Extraction Strategy
-
-### 3.1 Dual-Engine Architecture
-
-The extraction subsystem supports two production engines through a common `BaseExtractor` interface:
-
-| Engine | Use Case | Requirements |
-|---|---|---|
-| **Gemini Multimodal Vision** | Primary — high-accuracy semantic and visual data extraction | `GOOGLE_API_KEY` |
-| **Tesseract OCR + Regex** | Offline / air-gapped environments without external API calls | Local Tesseract OCR binary |
-
-### 3.2 LLM Prompt Engineering
-
-The LLM receives:
-1. The raw image bytes with correct MIME type
-2. A strict JSON schema prompt with explicit formatting rules (dates as YYYY-MM-DD, decimals with period separator, payment method enum values)
-3. Temperature = 0.1 for deterministic output
-
-Key prompt design decisions:
-- **Explicit enum constraints** for payment methods prevent hallucinated values
-- **No markdown fences** instruction prevents formatting wrapper issues
-- **Example values** in the schema help the model understand expected precision
-
-### 3.3 Mathematical Reconciliation
-
-Post-extraction, every line item and order total is cross-checked:
-
-```
-Line Total = Qty × Net Price × (1 - Discount/100)
-Gross Price = Net Price × (1 + VAT/100)
-Order Total Net = Σ Line Totals
-Order Total Gross = Net + VAT
+```text
+line net   = quantity × unit net × (1 - discount / 100)
+line VAT   = line net × VAT / 100
+gross      = total net + total VAT
 ```
 
-Mismatches beyond ±$0.05 are flagged as warnings. This catches OCR digit errors (e.g., "1" read as "7") that would otherwise propagate silently.
+Source and computed totals must agree within a small rounding tolerance. A missing required field, invalid date, or unexplained total mismatch should be reviewed before a live run.
 
----
+## 3. Control discovery and grounding
 
-## 4. Tradeoffs and Design Decisions
+Fakturama is an Eclipse RCP/SWT application. Its controls appear in the Windows UI Automation tree, allowing the workflow to use semantic properties instead of a fixed layout.
 
-### 4.1 Order-First vs. Master-Data-First
+Locators use this order of preference:
 
-We open the Order **before** resolving master data. This means:
+1. stable accessible name or AutomationId;
+2. control type within a named editor, tab, dialog, or navigation branch;
+3. association between a label and the next visible input sibling;
+4. relative geometry inside an already-grounded control only when SWT exposes no stronger identity.
 
-✅ The Order's built-in selectors serve as existence checks (no duplicate lookups)  
-✅ The Order tab stays open throughout, preserving context  
-⚠️ Multiple tab switching is required when creating new Debtors/Products
+Every candidate must be enabled, onscreen, and have a nonempty rectangle. The active business editor is identified by its selected tab, matching content pane, document type, and proposed number. This prevents a global search from changing a hidden template or the wrong tab.
 
-### 4.2 Full UI Flow vs. Direct DB Access
+SWT sometimes replaces controls while applying a filter or changing tabs. The wrapper therefore polls for state, reacquires disposed elements, waits for stable results, and reads the value back after each write. Combo-box items are clicked so SWT receives its real selection event; setting only the UIA value can leave Fakturama's internal pricing mode unchanged.
 
-We chose full UI automation over HSQLDB direct writes because:
+## 4. Order-first workflow
 
-✅ Exercises the same path a human user would take  
-✅ Validates Fakturama's auto-numbering, cascading saves, and follow-up document linkage  
-✅ Screenshots provide visual audit trail  
-⚠️ Slower (~2-5 minutes per order vs. <1 second for DB writes)  
-⚠️ More fragile to unexpected dialogs or UI state
+The system opens the New Order before resolving master data and leaves it open throughout the workflow.
 
-### 4.3 Stop-for-Review Safety
+- It preserves the proposed Order number, sets Date and Cust.Ref., and selects Net pricing.
+- The Order's address selector is the Debtor existence check. One exact match is selected; no match enters the creation branch; ambiguous matches stop for review.
+- Each item uses the Order's Product selector in source order. A missing Product triggers VAT validation and Product creation before returning to the same Order.
+- Selecting a Debtor or Product can reapply a stored Gross preference. The workflow therefore forces and verifies Net mode after those actions and immediately before saving.
+- The active editor is saved only after its identity, lines, and gross total have been verified.
+- Data > Documents is filtered by the generated number. The exact Order row must match its date, reference, open state, and total before the Invoice is created.
+- The Invoice is created from the saved Order's follow-up action to preserve linkage. Inherited details are checked, payment fields are applied, and the Invoice is saved and verified in Documents.
 
-When ambiguous data is detected (multiple Debtor matches, conflicting VAT definitions), the system raises `StopForReview` rather than guessing. This is a deliberate safety valve — wrong master data creation would cascade through all future documents.
+The flow ends after Invoice verification. It does not create a Delivery, Correction, or Dunning document.
 
----
+## 5. Verification, failure handling, and evidence
 
-## 5. If I Had 3 More Hours
+Verification is layered:
 
-1. **Accessibility tree mapping tool** — Build a quick utility that dumps Fakturama's full UIA tree as JSON/HTML for every editor state. This dramatically accelerates locator development and debugging.
+- **Field level:** every write is followed by a UI read-back.
+- **Line level:** quantity, unit price, VAT, discount, and calculated line price are compared with extracted values.
+- **Editor level:** Save must leave the same selected editor clean and retain the proposed document number.
+- **Document level:** the exact generated-number row is copied from the SWT Documents table and parsed into date, reference, state, and total fields.
+- **Visual level:** each completed workflow step produces a timestamped screenshot and caption.
 
-2. **Retry and recovery middleware** — Add an automatic retry layer that captures screenshots on failure, attempts to close unexpected dialogs (confirmation popups, error windows), and resumes from the last successful checkpoint.
+An ambiguous master-data result, changed editor identity, failed total, unverified Save, or missing Documents row stops the workflow. In particular, a failed Order read-back prevents Invoice creation.
 
-3. **Multi-order batch mode** — Accept a directory of PO images and process them sequentially, accumulating results into a summary report. Handle the case where Products/Debtors created during one order are reused in subsequent orders.
+## 6. Tradeoffs
 
-4. **Visual regression testing** — Compare milestone screenshots against golden baselines using structural similarity (SSIM) to detect unexpected UI changes.
+**UI Automation instead of coordinates:** This survives resizing and DPI changes and supplies readable state for verification. It still depends on accessible labels and SWT behavior, so major Fakturama or locale changes require validation.
 
-5. **End-to-end integration test** — Run the full flow against a fresh Fakturama workspace with known-empty master data, verifying that all created records are queryable in `Data > Documents` with exact field matching.
+**Order-first instead of master-data-first:** Fakturama's own selectors become authoritative existence checks and the work follows the requested user path. The cost is more tab switching and careful editor ownership.
+
+**Full UI instead of database writes:** UI automation preserves Fakturama validation, numbering, and document linkage and produces auditable evidence. It is slower and requires an unlocked interactive Windows session.
+
+**Stop instead of guess:** Stopping on ambiguity avoids duplicate Debtors, incorrect VAT definitions, and invoices linked to the wrong Order. Some cases therefore require a human decision.
+
+## 7. Current validation and remaining work
+
+The successful live regression used the existing-record branch and produced Order `PO000035` and linked Invoice `INV000020`, both verified at `276.97`. The test suite reports 76 passing tests. The missing Debtor, payment method, VAT, and Product paths exist and have automated coverage, but still require a clean-workspace live regression. Other Fakturama locales and multi-line source images also need end-to-end validation.
+
+With three additional hours, I would record those missing-master-data branches, run a multi-line order, validate a second locale and window size, and persist a focused UIA-tree snapshot whenever a control cannot be grounded.

@@ -524,67 +524,31 @@ class UIAWrapper:
         except Exception as e:
             raise UIAError(f"Cannot click element: {element.Name} ({e})")
 
-    def find_input_for_label(self, label_element) -> auto.Control:
-        """
-        Given a label control or edit control, resolve the editable input control.
-        Supports SWT GridLayout structures (label preceding input).
-        """
-        if label_element.ControlTypeName in ("EditControl", "ComboBoxControl", "SpinnerControl", "CheckBoxControl"):
-            return label_element
-
-        # Strategy 1: Sibling search in parent composite
-        try:
-            parent = label_element.GetParentControl()
-            if parent:
-                siblings = parent.GetChildren()
-                found = False
-                for s in siblings:
-                    if s == label_element or (
-                        s.NativeWindowHandle and label_element.NativeWindowHandle
-                        and s.NativeWindowHandle == label_element.NativeWindowHandle
-                    ):
-                        found = True
-                        continue
-                    if found:
-                        if s.ControlTypeName in ("EditControl", "ComboBoxControl", "SpinnerControl", "CheckBoxControl"):
-                            r = s.BoundingRectangle
-                            if r and r.width() > 0 and r.height() > 0:
-                                return s
-                        if s.ControlTypeName == "PaneControl":
-                            for sub in s.GetChildren():
-                                if sub.ControlTypeName in ("EditControl", "ComboBoxControl", "SpinnerControl", "CheckBoxControl"):
-                                    r = sub.BoundingRectangle
-                                    if r and r.width() > 0 and r.height() > 0:
-                                        return sub
-        except Exception:
-            pass
-
-        # Strategy 2: Relative spatial search (control immediately to the right)
-        try:
-            rect = label_element.BoundingRectangle
-            if rect and rect.width() > 0 and rect.height() > 0:
-                center_y = rect.top + (rect.bottom - rect.top) // 2
-                for offset_x in (20, 50, 90, 150):
-                    test_x = rect.right + offset_x
-                    ctrl = auto.ControlFromPoint(test_x, center_y)
-                    if ctrl and ctrl != label_element:
-                        if ctrl.ControlTypeName in ("EditControl", "ComboBoxControl", "SpinnerControl"):
-                            return ctrl
-                        if ctrl.ControlTypeName == "PaneControl":
-                            for sub in ctrl.GetChildren():
-                                if sub.ControlTypeName in ("EditControl", "ComboBoxControl", "SpinnerControl"):
-                                    return sub
-                        p = ctrl.GetParentControl()
-                        if p and p.ControlTypeName in ("EditControl", "ComboBoxControl", "SpinnerControl"):
-                            return p
-                        if p and p.ControlTypeName == "PaneControl":
-                            for sub in p.GetChildren():
-                                if sub.ControlTypeName in ("EditControl", "ComboBoxControl", "SpinnerControl"):
-                                    return sub
-        except Exception:
-            pass
-
-        return label_element
+    def find_input_for_label(self, label_element):
+        """Resolve visible, enabled input siblings; reject hidden SWT templates."""
+        types = ('EditControl', 'ComboBoxControl', 'SpinnerControl', 'CheckBoxControl')
+        if label_element.ControlTypeName in types:
+            if self.is_interactable(label_element):
+                return label_element
+            raise UIAError('Input is hidden, offscreen, disabled, or has an empty rectangle')
+        siblings = label_element.GetParentControl().GetChildren()
+        found = False
+        for sibling in siblings:
+            if sibling == label_element or (sibling.NativeWindowHandle
+                    and sibling.NativeWindowHandle == label_element.NativeWindowHandle):
+                found = True
+                continue
+            if not found:
+                continue
+            if sibling.ControlTypeName == 'TextControl':
+                break
+            candidates = [sibling]
+            if sibling.ControlTypeName == 'PaneControl':
+                candidates += sibling.GetChildren()
+            for candidate in candidates:
+                if candidate.ControlTypeName in types and self.is_interactable(candidate):
+                    return candidate
+        raise UIAError(f'No interactable input associated with label {label_element.Name!r}')
 
     def get_value(self, element) -> str:
         """Read the current value of an element using ValuePattern or Name."""
@@ -794,7 +758,7 @@ class UIAWrapper:
             pass
 
         # Substring match if expected contains actual or actual contains expected
-        if len(e) > 3 and (e in a or a in e):
+        if e and a and len(e) > 3 and (e in a or a in e):
             return True
 
         return False
@@ -802,6 +766,43 @@ class UIAWrapper:
     def set_value(self, element, value: str, delay: float | None = None):
         """Set value with verified read-back (maintains backwards compatibility)."""
         self.set_text_verified(element, value)
+
+    def set_swt_date_verified(self, element, value) -> str:
+        """Set an SWT segmented date edit and verify the displayed date."""
+        ensure_desktop_and_com()
+        if isinstance(value, datetime):
+            expected = value.date()
+        elif hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
+            expected = value
+        else:
+            expected = None
+            for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y"):
+                try:
+                    expected = datetime.strptime(str(value), fmt).date()
+                    break
+                except ValueError:
+                    continue
+            if expected is None:
+                raise UIAError(f"Unsupported SWT date value: {value!r}")
+        rect = element.BoundingRectangle
+        if not self.is_interactable(element) or rect.width() < 60:
+            raise UIAError("SWT date control is not interactable")
+        y = rect.top + rect.height() // 2
+        month = rect.left + max(5, int(rect.width() * .08))
+        year = rect.left + int(rect.width() * .60)
+        auto.Click(month, y); auto.SendKeys(str(expected.month)); auto.Click(year, y)
+        auto.Click(month, y); auto.SendKeys("{Right}"); auto.SendKeys(str(expected.day)); auto.Click(year, y)
+        auto.SendKeys(str(expected.year)); auto.Click(month, y); time.sleep(.25)
+        actual = self.get_value(element).strip()
+        parsed = None
+        for fmt in ("%b %d, %Y", "%B %d, %Y", "%d.%m.%Y", "%m/%d/%Y", "%d/%m/%Y"):
+            try:
+                parsed = datetime.strptime(actual, fmt).date(); break
+            except ValueError:
+                continue
+        if parsed != expected:
+            raise UIAError(f"SWT date commit failed: expected {expected.isoformat()}, displayed {actual!r}")
+        return actual
 
     def set_field_by_label(
         self, label_name: str, value: str, parent=None, timeout: float = 5.0,
@@ -871,11 +872,7 @@ class UIAWrapper:
                 for item in self._walk_tree(combo_element, max_depth=4):
                     i_name = (item.Name or "").strip()
                     if target_norm.lower() in i_name.lower():
-                        sip = item.GetSelectionItemPattern()
-                        if sip:
-                            sip.Select()
-                        else:
-                            self.click(item)
+                        self.click(item)
                         time.sleep(0.3)
                         break
             except Exception as e:
@@ -1006,6 +1003,115 @@ class UIAWrapper:
         except Exception:
             pass
 
+    @staticmethod
+    def is_interactable(control) -> bool:
+        try:
+            rect = control.BoundingRectangle
+            return bool(rect and rect.width() > 0 and rect.height() > 0
+                        and control.IsEnabled and not control.IsOffscreen)
+        except Exception:
+            return False
+
+    def active_editor(self) -> dict:
+        """Return the one selected business editor and its document identity."""
+        views = {'Documents', 'Products', 'VATs', 'Debtors', 'Creditors',
+                 'terms of payment', 'Shippings', 'Texts', 'Lists'}
+        candidates = []
+        for folder in self.find_all_by_type('TabControl', max_depth=12):
+            children = folder.GetChildren()
+            for tab in (c for c in children if c.ControlTypeName == 'TabItemControl'):
+                pattern = tab.GetSelectionItemPattern()
+                title = (tab.Name or '').strip()
+                if not pattern or not pattern.IsSelected or title in views | {'Fakturama'}:
+                    continue
+                bodies = [c for c in children if c.ControlTypeName == 'PaneControl'
+                          and (c.Name or '').lstrip('*').strip() == title.lstrip('*').strip()]
+                if len(bodies) == 1:
+                    candidates.append((folder, tab, bodies[0]))
+        if len(candidates) != 1:
+            raise UIAError(f'Save verification inconclusive: expected one selected editor, found {len(candidates)}')
+        folder, tab, body = candidates[0]
+        fields = self.find_all_by_type('EditControl', parent=body, max_depth=18)
+        labels = self.find_all_by_type('TextControl', parent=body, max_depth=18)
+        kind = next((c.Name for c in labels if c.Name in ('Order', 'Invoice')), '')
+        number = ''
+        if kind:
+            label = next((c for c in labels if c.Name == 'No.'), None)
+            if label:
+                number = self.get_value(self.find_input_for_label(label))
+            identity = (kind, number)
+        else:
+            identity = tuple((c.Name, self.get_value(c)) for c in fields
+                             if c.Name in ('Name', 'Company', 'First Name', 'Item Number'))
+        return dict(title=tab.Name.strip(), tab=tab, folder=folder, body=body,
+                    body_handle=body.NativeWindowHandle, kind=kind,
+                    number=number, identity=identity)
+
+    def _prepare_editor_save(self, state):
+        self._bring_to_front(self.get_root())
+        fields = self.find_all_by_type('EditControl', parent=state['body'], max_depth=18)
+        safe = next((e for e in fields if e.Name in ('Cust.Ref.', 'Name', 'Company', 'Item Number')
+                     and self.is_interactable(e)), None)
+        safe = safe or next((e for e in fields if self.is_interactable(e)), None)
+        if safe is None:
+            raise UIAError('Cannot focus a safe input inside the target editor')
+        safe.SetFocus(); auto.SendKeys('{Tab}'); safe.SetFocus()
+
+    def _dispatch_save(self, method, names):
+        if method == 'shortcut':
+            auto.SendKeys('{Ctrl}s'); return
+        for name in names:
+            button = self.find_toolbar_button(name, timeout=.3)
+            if button and self.is_interactable(button):
+                pattern = button.GetInvokePattern()
+                pattern.Invoke() if pattern else button.Click()
+                return
+        raise UIAError('Save toolbar command is unavailable or disabled')
+
+    def _save_diagnostics(self):
+        result = {}
+        try:
+            focus = auto.GetFocusedControl()
+            result['focus'] = (focus.ControlTypeName, focus.Name, focus.NativeWindowHandle)
+            result['tabs'] = [t.Name for t in self.find_all_by_type('TabItemControl', max_depth=18)]
+            button = self.find_toolbar_button('Save the current contents', timeout=.2)
+            result['save_enabled'] = button.IsEnabled if button else None
+        except Exception as exc:
+            result['inspection_error'] = str(exc)
+        return result
+
+    def save_active_editor(self, save_btn_names=None, timeout=4.0):
+        """Save only the selected editor and prove a matching clean identity."""
+        ensure_desktop_and_com()
+        before = self.active_editor()
+        if before['kind'] and not before['number']:
+            raise UIAError('Cannot save incomplete document editor: proposed number is blank')
+        if not before['title'].startswith('*') and not before['title'].lower().startswith('new '):
+            return before
+        self._prepare_editor_save(before)
+        names = save_btn_names or ['Save the current contents', 'Save', 'Speichern']
+        after = before
+        for method in ('shortcut', 'toolbar'):
+            self._dispatch_save(method, names)
+            deadline = time.monotonic() + timeout
+            while True:
+                try:
+                    after = self.active_editor()
+                except Exception as exc:
+                    raise UIAError(f'Save verification inconclusive: target disposed; {self._save_diagnostics()}') from exc
+                same_body = after['body_handle'] == before['body_handle']
+                same_identity = bool(before['identity']) and after['identity'] == before['identity']
+                if not same_body and not same_identity:
+                    raise UIAError(f'Save verification inconclusive: target identity changed from {before["identity"]!r} to {after["identity"]!r}')
+                if before['kind'] and after['number'] != before['number']:
+                    raise UIAError('Save verification failed: proposed document number changed')
+                if not after['title'].startswith('*') and not after['title'].lower().startswith('new '):
+                    return after
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(min(.15, timeout))
+        raise UIAError(f'Save verification failed: target remains dirty; {self._save_diagnostics()}')
+
     def close_active_tab(self):
         """
         Close the active editor tab using Ctrl+F4 (Eclipse standard).
@@ -1134,7 +1240,10 @@ class UIAWrapper:
         ensure_desktop_and_com()
         self._screenshot_counter += 1
         timestamp = datetime.now().strftime("%H%M%S")
-        safe_label = label.replace(" ", "_").replace("/", "-")[:50]
+        safe_label = label.replace(" ", "_")
+        for char in '<>:"/\\|?*':
+            safe_label = safe_label.replace(char, '-')
+        safe_label = safe_label[:50]
         filename = f"{self._screenshot_counter:03d}_{timestamp}_{safe_label}.png"
         filepath = self._screenshot_dir / filename
 

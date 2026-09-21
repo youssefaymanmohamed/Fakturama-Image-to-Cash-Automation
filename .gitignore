@@ -16,7 +16,6 @@ env/
 .vscode/
 *.swp
 *.swo
-artifacts/
 *.db
 *.hsqldb
 @AutomationLog.txt
