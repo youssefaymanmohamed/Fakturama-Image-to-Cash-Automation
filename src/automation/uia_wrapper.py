@@ -942,28 +942,62 @@ class UIAWrapper:
 
     def save_active_editor(self, save_btn_names: list[str] = None):
         """
-        Save the active editor tab using Ctrl+S with toolbar fallback.
-        Verifies save operation.
+        Save the active editor tab using toolbar Save button with Ctrl+S and Alt+F+S fallbacks.
         """
         ensure_desktop_and_com()
-        try:
-            auto.SendKeys("{Ctrl}s")
-            time.sleep(0.6)
-        except Exception:
-            pass
-
         if not save_btn_names:
             save_btn_names = ["Save the current contents", "Save", "Speichern"]
 
+        try:
+            root = self.get_root()
+            self._bring_to_front(root)
+            time.sleep(0.2)
+        except Exception:
+            pass
+
+        # Shift focus away from any active inline text control to commit modifications
+        try:
+            auto.SendKeys("{Tab}")
+            time.sleep(0.1)
+            auto.SendKeys("{Shift}{Tab}")
+            time.sleep(0.1)
+        except Exception:
+            pass
+
+        saved = False
         for name in save_btn_names:
             try:
                 btn = self.find_toolbar_button(name, timeout=1.0)
                 if btn and btn.IsEnabled:
-                    self.click(btn)
-                    time.sleep(0.5)
-                    return
-            except Exception:
-                pass
+                    logger.info(f"Clicking Save toolbar button: '{btn.Name}'")
+                    r = btn.BoundingRectangle
+                    if r and r.width() > 0 and r.height() > 0:
+                        cx = r.left + r.width() // 2
+                        cy = r.top + r.height() // 2
+                        auto.Click(cx, cy)
+                    else:
+                        btn.Click()
+                    time.sleep(0.4)
+                    saved = True
+                    break
+            except Exception as e:
+                logger.debug(f"Save button click notice '{name}': {e}")
+
+        # Shortcut guarantee 1: Ctrl+S
+        try:
+            auto.SendKeys("{Ctrl}s")
+            time.sleep(0.5)
+        except Exception:
+            pass
+
+        # Shortcut guarantee 2: Alt+F -> s (Eclipse File -> Save)
+        try:
+            auto.SendKeys("{Alt}f")
+            time.sleep(0.2)
+            auto.SendKeys("s")
+            time.sleep(0.5)
+        except Exception:
+            pass
 
     def close_active_tab(self):
         """
@@ -985,29 +1019,51 @@ class UIAWrapper:
         ensure_desktop_and_com()
         try:
             root = self.get_root()
+            # 1. Search directly for TabItemControls across root
+            all_tabs = self.find_all_by_type("TabItemControl", parent=root, max_depth=10)
+            for t in reversed(all_tabs):
+                t_name = (t.Name or "").strip()
+                if tab_title_part.lower() in t_name.lower():
+                    r = t.BoundingRectangle
+                    if r and r.width() > 0 and r.height() > 0:
+                        auto.Click(r.left + r.width() // 2, r.top + r.height() // 2)
+                        time.sleep(0.3)
+                        return True
+                    try:
+                        self.click(t)
+                        time.sleep(0.3)
+                        return True
+                    except Exception:
+                        pass
+                    try:
+                        sp = t.GetSelectionItemPattern()
+                        if sp:
+                            sp.Select()
+                            time.sleep(0.3)
+                            return True
+                    except Exception:
+                        pass
+
+            # 2. Search via TabControl containers
             tab_controls = self.find_all_by_type("TabControl", parent=root, max_depth=7)
             for tc in tab_controls:
                 try:
-                    # New editors are appended to the tab strip. Prefer the
-                    # newest matching editor so repeated demo runs do not
-                    # continue operating on an older unsaved document.
                     for t in reversed(tc.GetChildren()):
-                        if t.ControlTypeName == "TabItemControl":
-                            t_name = (t.Name or "").strip()
-                            if tab_title_part.lower() in t_name.lower():
-                                try:
-                                    sp = t.GetSelectionItemPattern()
-                                    if sp:
-                                        sp.Select()
-                                        time.sleep(0.3)
-                                        return True
-                                except Exception:
-                                    pass
+                        t_name = (t.Name or "").strip()
+                        if tab_title_part.lower() in t_name.lower():
+                            r = t.BoundingRectangle
+                            if r and r.width() > 0 and r.height() > 0:
+                                auto.Click(r.left + r.width() // 2, r.top + r.height() // 2)
+                                time.sleep(0.3)
+                                return True
+                            try:
                                 self.click(t)
                                 time.sleep(0.3)
                                 return True
+                            except Exception:
+                                pass
                 except Exception:
-                    continue
+                    pass
         except Exception:
             pass
         return False

@@ -17,7 +17,7 @@ import ctypes.wintypes as wintypes
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Optional
@@ -135,35 +135,81 @@ class FakturamaApp:
 
         self._milestone("1.3", "New Order editor opened and verified")
 
-    def set_order_date(self, order_date: str) -> None:
-        """Step 1.5: Set and verify the Order Date field."""
+    def set_order_date(self, order_date: str | date | datetime) -> None:
+        """Step 1.5: Select order date and verify read-back value."""
         root = self.uia.get_root()
+        if isinstance(order_date, (datetime, date)):
+            expected = order_date if isinstance(order_date, date) else order_date.date()
+            date_str = expected.strftime("%d.%m.%Y")
+        else:
+            date_str = str(order_date)
+            for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%m/%d/%Y"):
+                try:
+                    expected = datetime.strptime(date_str, fmt).date()
+                    break
+                except ValueError:
+                    expected = None
+            if expected is None:
+                expected = date.today()
+
         date_candidates = [ORDER.ORDER_DATE, "Date", "Order Date", "Datum"]
         for label in date_candidates:
             try:
                 label_element = self.uia.find_by_name(label, parent=root, timeout=3.0)
                 target = self.uia.find_input_for_label(label_element)
-                expected = datetime.strptime(order_date, "%d.%m.%Y").date()
 
                 def date_matches(_, actual: str) -> bool:
-                    for fmt in ("%b %d, %Y", "%d.%m.%Y", "%m/%d/%Y"):
+                    for fmt in ("%b %d, %Y", "%d.%m.%Y", "%m/%d/%Y", "%Y-%m-%d"):
                         try:
                             return datetime.strptime(actual.strip(), fmt).date() == expected
                         except ValueError:
                             continue
                     return False
 
-                # Fakturama's SWT date control accepts locale-formatted input and
-                # reads it back as a localized date (for example, "Sep 20, 2026").
-                locale_value = expected.strftime("%m/%d/%Y")
-                self.uia.set_text_verified(
-                    target,
-                    locale_value,
-                    field_name=label,
-                    timeout=3.0,
-                    verifier=date_matches,
-                )
-                self._milestone("1.5", f"Order date set and verified: {order_date}")
+                # Fakturama's SWT date control accepts locale-formatted input (%d.%m.%Y or %m/%d/%Y)
+                # and reads it back as a localized date.
+                locale_value = expected.strftime("%d.%m.%Y")
+                try:
+                    try:
+                        target.Click()
+                        time.sleep(0.1)
+                        auto.SendKeys("{Ctrl}a")
+                        time.sleep(0.05)
+                        auto.SendKeys(locale_value)
+                        time.sleep(0.1)
+                        auto.SendKeys("{Enter}")
+                        time.sleep(0.2)
+                    except Exception:
+                        pass
+
+                    self.uia.set_text_verified(
+                        target,
+                        locale_value,
+                        field_name=label,
+                        timeout=4.0,
+                        verifier=date_matches,
+                    )
+                except Exception:
+                    locale_value = expected.strftime("%m/%d/%Y")
+                    try:
+                        target.Click()
+                        time.sleep(0.1)
+                        auto.SendKeys("{Ctrl}a")
+                        time.sleep(0.05)
+                        auto.SendKeys(locale_value)
+                        time.sleep(0.1)
+                        auto.SendKeys("{Enter}")
+                        time.sleep(0.2)
+                    except Exception:
+                        pass
+                    self.uia.set_text_verified(
+                        target,
+                        locale_value,
+                        field_name=label,
+                        timeout=4.0,
+                        verifier=date_matches,
+                    )
+                self._milestone("1.5", f"Order date set and verified: {date_str}")
                 return
             except Exception as e:
                 logger.debug(f"Date set failed with label '{label}': {e}")
@@ -1282,27 +1328,31 @@ class FakturamaApp:
             if bounds and bounds.top < 300 and name.lower() != "fakturama":
                 editor_tabs.append(tab)
 
-        # Find the active or dirty editor tab
-        selected_editor = next((tab for tab in editor_tabs if self._is_selected_tab(tab)), None)
-        if selected_editor is None:
-            dirty_editors = [
-                tab for tab in editor_tabs
-                if (tab.Name or "").strip().startswith("*")
-            ]
-            if dirty_editors:
-                selected_editor = dirty_editors[-1]
-            elif editor_tabs:
+        # Prioritize dirty editor tabs (starting with '*') as the target to save
+        dirty_editors = [
+            tab for tab in editor_tabs
+            if (tab.Name or "").strip().startswith("*")
+        ]
+        if dirty_editors:
+            selected_editor = dirty_editors[-1]
+        else:
+            selected_editor = next((tab for tab in editor_tabs if self._is_selected_tab(tab)), None)
+            if selected_editor is None and editor_tabs:
                 selected_editor = editor_tabs[-1]
 
-        selected_editor_title = (
-            (selected_editor.Name or "").strip().lstrip("*")
+        target_dirty_name = (
+            (selected_editor.Name or "").strip()
             if selected_editor is not None
             else ""
         )
 
         if selected_editor is not None:
             try:
-                self.uia.click(selected_editor)
+                r = selected_editor.BoundingRectangle
+                if r and r.width() > 0 and r.height() > 0:
+                    auto.Click(r.left + r.width() // 2, r.top + r.height() // 2)
+                else:
+                    self.uia.click(selected_editor)
                 time.sleep(0.3)
             except Exception:
                 pass
@@ -1316,17 +1366,24 @@ class FakturamaApp:
                 tabs = self.uia.find_all_by_type(
                     "TabItemControl", parent=self.uia.get_root()
                 )
-                # 1. If there are no dirty editor tabs remaining in Fakturama, save succeeded
                 dirty_tabs = [
                     t for t in tabs
                     if t.BoundingRectangle and t.BoundingRectangle.top < 300
                     and (t.Name or "").strip().startswith("*")
                 ]
+                # 1. If there are no dirty editor tabs remaining in Fakturama, save succeeded
                 if not dirty_tabs:
                     saved = True
                     break
 
-                # 2. Check active/selected tab
+                # 2. Check if the specific target tab being saved is no longer dirty or closed
+                if target_dirty_name and target_dirty_name.startswith("*"):
+                    matching_target = [t for t in dirty_tabs if (t.Name or "").strip() == target_dirty_name]
+                    if not matching_target:
+                        saved = True
+                        break
+
+                # 3. Check active/selected tab
                 editor_tabs_now = [
                     t for t in tabs
                     if t.BoundingRectangle and t.BoundingRectangle.top < 300
@@ -1339,19 +1396,16 @@ class FakturamaApp:
                         saved = True
                         break
 
-                # 3. Check newest editor tab (rightmost in tab bar)
-                if editor_tabs_now:
-                    newest_name = (editor_tabs_now[-1].Name or "").strip()
-                    if not newest_name.startswith("*"):
-                        saved = True
-                        break
-
                 time.sleep(0.4)
             if saved:
                 break
             if attempt < 2 and selected_editor is not None:
                 try:
-                    self.uia.click(selected_editor)
+                    r = selected_editor.BoundingRectangle
+                    if r and r.width() > 0 and r.height() > 0:
+                        auto.Click(r.left + r.width() // 2, r.top + r.height() // 2)
+                    else:
+                        self.uia.click(selected_editor)
                     time.sleep(0.3)
                 except Exception:
                     pass
