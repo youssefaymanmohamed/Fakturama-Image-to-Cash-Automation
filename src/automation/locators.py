@@ -2,8 +2,8 @@
 Semantic locator definitions for Fakturama 2.2.
 
 Centralizes all UI element identifiers (Names, AutomationIds, ClassNames)
-so that the automation code never uses hardcoded strings. If Fakturama
-changes its UI labels, only this file needs updating.
+so that the automation code never uses hardcoded strings. Confirmed against
+the live installed Fakturama 2.2 application.
 """
 
 from dataclasses import dataclass
@@ -11,12 +11,19 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class ToolbarLocators:
-    """Top-level toolbar buttons."""
-    SAVE = "Save"
-    ORDER_NEW = "Order"
-    INVOICE_NEW = "Invoice"
-    NEW_CONTACT = "New Contact"
-    NEW_PRODUCT = "New product"
+    """Top-level toolbar buttons in Fakturama 2.2."""
+    SAVE = "Save the current contents"
+    ORDER_NEW = "Create: New Order"
+    INVOICE_NEW = "Create: New Invoice"
+    NEW_CONTACT = "Create a new contact"
+    NEW_PRODUCT = "Create a new product"
+
+    # Fallback lists for robust discovery across UI states
+    SAVE_NAMES = ("Save the current contents", "Save", "Speichern")
+    ORDER_NEW_NAMES = ("Create: New Order", "New Order", "Order")
+    INVOICE_NEW_NAMES = ("Create: New Invoice", "New Invoice", "Invoice")
+    NEW_CONTACT_NAMES = ("Create a new contact", "New Contact", "Contact")
+    NEW_PRODUCT_NAMES = ("Create a new product", "New product", "Product")
 
 
 @dataclass(frozen=True)
@@ -25,30 +32,39 @@ class NavigationLocators:
     DATA = "Data"
     DOCUMENTS = "Documents"
     CONTACTS = "Contacts"
+    DEBTORS = "Debtors"
+    CREDITORS = "Creditors"
     PRODUCTS = "Products"
     VATS = "VATs"
     TERMS_OF_PAYMENT = "terms of payment"
     NEW_PANEL = "New"
+    NEW_PRODUCT = "New product"
+    NEW_CONTACT = "New Contact"
 
 
 @dataclass(frozen=True)
 class OrderEditorLocators:
     """Fields and controls within the Order editor tab."""
+    TAB_PREFIX = "New Order"
+    ORDER_TAB_PREFIX = "Order:"
+
     # Header fields
     ORDER_NUMBER = "No."
     ORDER_DATE = "Date"
     CUST_REF = "Cust.Ref."
     PRICE_MODE_NET = "Net"
+    PRICE_MODE_GROSS = "Gross"
+    VAT_MODE = "VAT"
     VAT_WITH = "With VAT"
 
     # Address section
     ADDRESSES_LABEL = "Addresses"
-    SELECT_CONTACT_ICON = "Select the address"  # Upper existing-contact icon
-    NEW_CONTACT_ICON = "New contact"  # Lower green + icon (DO NOT USE for selection)
+    INVOICE_ADDRESS_TAB = "Invoice address"
+    PICK_ADDRESS_TOOLTIP = "Pick an address from the list of all contacts"
 
     # Items section
-    ITEMS_TABLE = "Items"
-    SELECT_PRODUCT_ICON = "Select a product"  # Upper product-selection icon
+    ITEMS_LABEL = "Items"
+    PICK_PRODUCT_TOOLTIP = "Pick an item from the list of all products"
 
     # Item line fields (within the selected line)
     ITEM_QTY = "Qty."
@@ -56,6 +72,8 @@ class OrderEditorLocators:
     ITEM_VAT = "VAT"
     ITEM_DISCOUNT = "Discount"
     ITEM_PRICE = "Price"
+    ITEM_NUMBER = "Item No."
+    ITEM_NAME = "Name"
 
     # Totals
     DISCOUNT_OVERALL = "Discount"
@@ -65,6 +83,7 @@ class OrderEditorLocators:
     TOTAL_GROSS = "Total"
 
     # Follow-up
+    FOLLOWUP_GROUP = "Create a follow-up document"
     FOLLOWUP_INVOICE = "Invoice"
 
 
@@ -74,13 +93,15 @@ class ContactEditorLocators:
     CUSTOMER_ID = "Customer ID"
     COMPANY = "Company"
     FIRST_NAME = "First Name"
-    LAST_NAME = "Name"  # Note: Fakturama labels it "Name" not "Last Name"
+    LAST_NAME = "Name"  # Fakturama labels it "Name"
+    FIRST_LAST_NAME = "First Name Last Name"
     SALUTATION = "Salutation"
 
     # Address tab
     ADDRESSES_TAB = "Addresses"
     MAIN_ADDRESS = "Main address"
     STREET = "Street"
+    ZIP_CITY = "ZIP - City"
     ZIP_CODE = "ZIP"
     CITY = "City"
     COUNTRY = "Country"
@@ -153,10 +174,11 @@ class DialogLocators:
     """Common dialog buttons and elements."""
     OK = "OK"
     CANCEL = "Cancel"
+    SEARCH_LABEL = "Search:"
     SEARCH_FIELD = "Search"
     SELECT_ADDRESS_DIALOG = "Select the address"
     SELECT_PRODUCT_DIALOG = "Select a product"
-    GREEN_PLUS = "+"  # Green + button for adding new items
+    GREEN_PLUS = "+"
 
 
 @dataclass(frozen=True)

@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 from src.automation.fakturama_app import FakturamaApp
-from src.automation.uia_wrapper import UIAWrapper, StopForReview
+from src.automation.uia_wrapper import UIAWrapper, StopForReview, ensure_desktop_and_com
 from src.extractors.base import BaseExtractor
 from src.models.order import DocumentVerification, OrderData, PaidStatus
 
@@ -138,6 +138,7 @@ class Orchestrator:
                 return result
 
             # 1.3: Attach to Fakturama and open New Order
+            ensure_desktop_and_com()
             self._report("1.3", "Attaching to Fakturama...")
             self.uia.attach_or_launch()
             time.sleep(1.0)
@@ -223,7 +224,7 @@ class Orchestrator:
                         )
 
                 # 3.13-3.16: Set line item details
-                self.app.set_order_line(item)
+                self.app.set_order_line(item, row_index=idx)
                 result.steps_completed.append(f"3: Product {item.sku} added")
 
             # =============================================================

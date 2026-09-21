@@ -64,6 +64,18 @@ class TestOrderItem:
         # 24.50 × 1.19 = 29.155 → 29.16
         assert item.gross_unit_price == Decimal("29.16")
 
+    def test_rounded_gross_unit_price_preserves_fakturama_line_total(self):
+        """Fakturama multiplies its displayed rounded gross unit price."""
+        item = OrderItem(
+            sku="TEST",
+            quantity=Decimal("10"),
+            unit_net_price=Decimal("24.50"),
+            vat_percent=Decimal("19"),
+        )
+        assert (item.gross_unit_price * item.quantity).quantize(
+            Decimal("0.01")
+        ) == Decimal("291.60")
+
     def test_line_total_no_discount(self):
         item = OrderItem(
             sku="TEST",
