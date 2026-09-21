@@ -547,11 +547,15 @@ class UIAWrapper:
                         continue
                     if found:
                         if s.ControlTypeName in ("EditControl", "ComboBoxControl", "SpinnerControl", "CheckBoxControl"):
-                            return s
+                            r = s.BoundingRectangle
+                            if r and r.width() > 0 and r.height() > 0:
+                                return s
                         if s.ControlTypeName == "PaneControl":
                             for sub in s.GetChildren():
                                 if sub.ControlTypeName in ("EditControl", "ComboBoxControl", "SpinnerControl", "CheckBoxControl"):
-                                    return sub
+                                    r = sub.BoundingRectangle
+                                    if r and r.width() > 0 and r.height() > 0:
+                                        return sub
         except Exception:
             pass
 
@@ -629,24 +633,26 @@ class UIAWrapper:
         for attempt in range(1, retries + 1):
             logger.debug(f"Setting field '{field_repr}' to '{expected_norm}' (attempt {attempt}/{retries})")
 
-            # Method A: ValuePattern (cleanest, doesn't depend on keyboard focus)
-            try:
-                vp = target.GetValuePattern()
-                if vp:
-                    vp.SetValue(expected_norm)
-                    time.sleep(0.1)
-                    # Trigger SWT listeners
-                    target.SetFocus()
-                    auto.SendKeys("{Tab}")
-                    time.sleep(0.2)
-            except Exception:
-                pass
+            # Method A: ValuePattern (only on attempt 1 to prevent overwriting SendKeys on retry)
+            if attempt == 1:
+                try:
+                    vp = target.GetValuePattern()
+                    if vp:
+                        vp.SetValue(expected_norm)
+                        time.sleep(0.1)
+                        # Trigger SWT listeners
+                        target.SetFocus()
+                        auto.SendKeys("{Tab}")
+                        time.sleep(0.2)
 
-            # Read back check
-            actual_val = self.get_value(target)
-            if matches(expected_norm, actual_val):
-                logger.info(f"Verified field '{field_repr}' = '{actual_val}' (via ValuePattern)")
-                return True
+                        actual_val = self.get_value(target)
+                        if matches(expected_norm, actual_val):
+                            logger.info(f"Verified field '{field_repr}' = '{actual_val}' (via ValuePattern)")
+                            return True
+                        else:
+                            logger.info(f"Method A readback mismatch for '{field_repr}': expected='{expected_norm}', got='{actual_val}'")
+                except Exception as ex:
+                    logger.debug(f"Method A exception for '{field_repr}': {ex}")
 
             # Method B: Focus + Ctrl+A + Backspace + SendKeys + Tab
             try:
@@ -672,6 +678,8 @@ class UIAWrapper:
             if matches(expected_norm, actual_val):
                 logger.info(f"Verified field '{field_repr}' = '{actual_val}' (via SendKeys)")
                 return True
+            else:
+                logger.info(f"Method B readback mismatch for '{field_repr}': expected='{expected_norm}', got='{actual_val}'")
 
             # Method C: Clipboard Paste fallback
             try:
@@ -942,7 +950,8 @@ class UIAWrapper:
 
     def save_active_editor(self, save_btn_names: list[str] = None):
         """
-        Save the active editor tab using toolbar Save button with Ctrl+S and Alt+F+S fallbacks.
+        Save the active editor tab using Ctrl+S, toolbar Save button, and Alt+F+S fallbacks.
+        Ensures keyboard focus is inside the active editor document body prior to save triggers.
         """
         ensure_desktop_and_com()
         if not save_btn_names:
@@ -955,16 +964,22 @@ class UIAWrapper:
         except Exception:
             pass
 
-        # Shift focus away from any active inline text control to commit modifications
+        # Commit active inline text/cell controls
         try:
-            auto.SendKeys("{Tab}")
-            time.sleep(0.1)
-            auto.SendKeys("{Shift}{Tab}")
+            auto.SendKeys("{Enter}")
             time.sleep(0.1)
         except Exception:
             pass
 
-        saved = False
+        # 1. Primary save shortcut: Ctrl+S
+        try:
+            logger.info("Sending Ctrl+S to save active editor...")
+            auto.SendKeys("{Ctrl}s")
+            time.sleep(0.6)
+        except Exception as e:
+            logger.debug(f"Ctrl+S notice: {e}")
+
+        # 2. Save toolbar button click fallback
         for name in save_btn_names:
             try:
                 btn = self.find_toolbar_button(name, timeout=1.0)
@@ -978,19 +993,11 @@ class UIAWrapper:
                     else:
                         btn.Click()
                     time.sleep(0.4)
-                    saved = True
                     break
             except Exception as e:
                 logger.debug(f"Save button click notice '{name}': {e}")
 
-        # Shortcut guarantee 1: Ctrl+S
-        try:
-            auto.SendKeys("{Ctrl}s")
-            time.sleep(0.5)
-        except Exception:
-            pass
-
-        # Shortcut guarantee 2: Alt+F -> s (Eclipse File -> Save)
+        # 3. File menu shortcut fallback: Alt+F -> s
         try:
             auto.SendKeys("{Alt}f")
             time.sleep(0.2)
