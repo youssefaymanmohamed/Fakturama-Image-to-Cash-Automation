@@ -1316,17 +1316,26 @@ class FakturamaApp:
                 tabs = self.uia.find_all_by_type(
                     "TabItemControl", parent=self.uia.get_root()
                 )
-                for t in tabs:
-                    t_name = (t.Name or "").strip()
-                    if t_name.lstrip("*") == selected_editor_title or (selected_editor_title and selected_editor_title in t_name):
-                        if not t_name.startswith("*"):
-                            saved = True
-                            break
-                    elif not any(x.Name.startswith("*") for x in tabs if x.BoundingRectangle and x.BoundingRectangle.top < 300):
+                editor_tabs_now = [
+                    t for t in tabs
+                    if t.BoundingRectangle and t.BoundingRectangle.top < 300
+                    and (t.Name or "").strip().lower() != "fakturama"
+                ]
+                # Check active/selected tab
+                active_tab = next((t for t in editor_tabs_now if self._is_selected_tab(t)), None)
+                if active_tab is not None:
+                    act_name = (active_tab.Name or "").strip()
+                    if not act_name.startswith("*"):
                         saved = True
                         break
-                if saved:
-                    break
+
+                # Check newest editor tab (rightmost in tab bar)
+                if editor_tabs_now:
+                    newest_name = (editor_tabs_now[-1].Name or "").strip()
+                    if not newest_name.startswith("*"):
+                        saved = True
+                        break
+
                 time.sleep(0.4)
             if saved:
                 break
